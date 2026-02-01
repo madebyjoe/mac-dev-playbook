@@ -1,0 +1,38 @@
+---
+- name: Setup Mac remotely
+  hosts: macs
+  become: false # We don't need root for Homebrew, it handles sudo itself
+  vars_files:
+    - vars/apps.yml
+
+  pre_tasks:
+    - name: Ensure Homebrew is installed
+      stat:
+        path: /opt/homebrew/bin/brew
+      register: homebrew_check
+
+    - name: Install Homebrew (if missing)
+      shell: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      when: not homebrew_check.stat.exists
+
+  tasks:
+    - name: Ensure CLI packages are installed
+      community.general.homebrew:
+        name: "{{ item }}"
+        state: present
+        update_homebrew: true
+      loop: "{{ homebrew_packages }}"
+
+    - name: Ensure Cask applications are installed
+      community.general.homebrew_cask:
+        name: "{{ item }}"
+        state: present
+        accept_external_apps: true # Helps if you installed it manually before
+      loop: "{{ homebrew_cask_apps }}"
+
+    - name: Install Mac App Store apps
+      community.general.mas:
+        id: "{{ item.id }}"
+        state: present
+      loop: "{{ mas_apps }}"
+      ignore_errors: true # Creating a headless setup, MAS often fails if not logged in
