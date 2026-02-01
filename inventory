@@ -1,2 +1,20 @@
-[macs]
+# Define different profiles as groups, all pointing to localhost
+[personal]
 localhost ansible_connection=local
+
+[work]
+localhost ansible_connection=local
+
+[headless]
+localhost ansible_connection=local
+# Alternatively
+# {remote-ip}  ansible_user={client-username}
+
+# All profiles should get core packages
+[profiles:children]
+personal
+work
+headless
+
+[profiles:vars]
+ansible_python_interpreter=/usr/bin/python3

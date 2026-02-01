@@ -1,0 +1,14 @@
+---
+profile_homebrew_taps: []
+
+profile_homebrew_packages:
+  - mosh
+  - ncdu
+  - docker
+  - docker-compose
+  - tmux
+  - htop
+
+profile_homebrew_cask_apps: []  # No GUI
+
+profile_mas_apps: []

@@ -1,0 +1,77 @@
+---
+core_homebrew_taps: []
+
+core_homebrew_packages:
+  - ansible
+  - bash
+  - chezmoi
+  - colima
+  - coreutils
+  - dfu-util
+  - docker
+  - docker-buildx
+  - docker-compose
+  - ffmpeg
+  - flac
+  - fprobe
+  - git
+  - grep
+  - jenv
+  - mackup
+  - mas
+  - maven
+  - mosh
+  - ncdu
+  - node
+  - ollama
+  - opencode
+  - pandoc
+  - pdf-diff
+  - pkg-config
+  - pipx
+  - pyenv
+  - speedtest-cli
+  - svn
+  - tree
+  - yt-dlp
+
+core_homebrew_cask_apps:
+  # Fonts
+  - font-lato
+  - font-open-sans
+  - font-roboto
+  - font-source-code-pro
+  # Core Apps
+  - android-studio
+  - arc
+  - atext
+  - balenaetcher
+  - betterdisplay
+  - bitwarden
+  - firefox
+  - ghostty
+  - iterm2
+  - lm-studio
+  - jordanbaird-ice
+  - obsidian
+  - orbstack
+  - raycast
+  - rectangle
+  - slack
+  - sourcetree
+  - spotify
+  - sublime-text
+  - the-unarchiver
+  - visual-studio-code
+  - vlc
+  - yubico-authenticator
+  - zen-browser
+  - zoom
+
+core_mas_apps: []
+
+# Initialize empty profile vars (will be overridden by group_vars)
+profile_homebrew_taps: []
+profile_homebrew_packages: []
+profile_homebrew_cask_apps: []
+profile_mas_apps: []

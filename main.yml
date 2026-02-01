@@ -1,11 +1,26 @@
 ---
-- name: Setup Mac remotely
-  hosts: macs
-  become: false # We don't need root for Homebrew, it handles sudo itself
-  vars_files:
-    - vars/apps.yml
+- name: Setup Mac
+  hosts: all  # We'll use --limit to choose which profile
+  become: false
+
+  vars:
+    # Combine core + profile-specific packages
+    homebrew_taps: "{{ (core_homebrew_taps | default([]) + profile_homebrew_taps | default([])) | unique }}"
+    homebrew_packages: "{{ (core_homebrew_packages | default([]) + profile_homebrew_packages | default([])) | unique }}"
+    homebrew_cask_apps: "{{ (core_homebrew_cask_apps | default([]) + profile_homebrew_cask_apps | default([])) | unique }}"
+    mas_apps: "{{ (core_mas_apps | default([]) + profile_mas_apps | default([])) | unique }}"
 
   pre_tasks:
+    - name: Display installation plan
+      debug:
+        msg:
+          - "Profile: {{ group_names }}"
+          - "Core packages: {{ core_homebrew_packages | default([]) | length }}"
+          - "Profile packages: {{ profile_homebrew_packages | default([]) | length }}"
+          - "Total packages to install: {{ homebrew_packages | length }}"
+          - "Total casks to install: {{ homebrew_cask_apps | length }}"
+      tags: ['debug']
+
     - name: Ensure Homebrew is installed
       stat:
         path: /opt/homebrew/bin/brew
@@ -16,23 +31,71 @@
       when: not homebrew_check.stat.exists
 
   tasks:
+    - name: Ensure Homebrew Taps are tapped
+      community.general.homebrew_tap:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ homebrew_taps }}"
+      register: tap_result
+      failed_when: false  # Don't stop on errors
+      
+    - name: Show tap errors
+      debug:
+        msg: "Failed to tap {{ item.item }}: {{ item.msg | default('Unknown error') }}"
+      loop: "{{ tap_result.results }}"
+      when: item.failed | default(false)
+
     - name: Ensure CLI packages are installed
       community.general.homebrew:
         name: "{{ item }}"
         state: present
-        update_homebrew: true
+        update_homebrew: false  # Only update once, not per package
       loop: "{{ homebrew_packages }}"
+      register: package_result
+      failed_when: false
+
+    - name: Show package errors
+      debug:
+        msg: "Failed to install {{ item.item }}: {{ item.msg | default('Unknown error') }}"
+      loop: "{{ package_result.results }}"
+      when: item.failed | default(false)
 
     - name: Ensure Cask applications are installed
       community.general.homebrew_cask:
         name: "{{ item }}"
         state: present
-        accept_external_apps: true # Helps if you installed it manually before
+        accept_external_apps: true
       loop: "{{ homebrew_cask_apps }}"
+      register: cask_result
+      failed_when: false
+      async: 600  # 10 minute timeout per cask
+      poll: 10    # Check every 10 seconds
+
+    - name: Show cask errors
+      debug:
+        msg: "Failed to install {{ item.item }}: {{ item.msg | default('Unknown error') }}"
+      loop: "{{ cask_result.results }}"
+      when: item.failed | default(false)
 
     - name: Install Mac App Store apps
       community.general.mas:
         id: "{{ item.id }}"
         state: present
       loop: "{{ mas_apps }}"
-      ignore_errors: true # Creating a headless setup, MAS often fails if not logged in
+      when: mas_apps | length > 0
+      register: mas_result
+      failed_when: false
+
+    - name: Show MAS errors
+      debug:
+        msg: "Failed to install {{ item.item.name }}: {{ item.msg | default('Unknown error') }}"
+      loop: "{{ mas_result.results | default([]) }}"
+      when: item.failed | default(false)
+
+    - name: Summary of failures
+      debug:
+        msg:
+          - "=== Installation Summary ==="
+          - "Failed taps: {{ tap_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
+          - "Failed packages: {{ package_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
+          - "Failed casks: {{ cask_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"

@@ -1,0 +1,64 @@
+---
+profile_homebrew_taps: []
+
+profile_homebrew_packages:
+  - ansible
+  - chezmoi
+  - colima
+  - docker
+  - docker-buildx
+  - docker-compose
+  - ffmpeg
+  - flac
+  - jenv
+  - mackup
+  - maven
+  - mosh
+  - ncdu
+  - node
+  - ollama
+  - pandoc
+  - pyenv
+  - speedtest-cli
+  - yt-dlp
+
+profile_homebrew_cask_apps:
+  # Emulation
+  # - chiaki
+  - dolphin
+  - moonlight
+  # Personal
+  - 1password
+  - airtable
+  - arduino-ide
+  - cardhop
+  - coolterm
+  - discord
+  - dropbox
+  # - eagle
+  - fantastical
+  - mqtt-explorer
+  # - mullvadvpn
+  # - nextcloud
+  - notion
+  # - parsec
+  - prusaslicer
+  - roon
+  - sketch
+  - steam
+  - syncthing
+  # - tailscale
+  - ticktick
+  - transmission
+  - ultimaker-cura
+
+profile_mas_apps:
+  - { id: 1672085276, name: "Aiko" }
+  - { id: 425264550, name:  "Blackmagic Disc Speed Test" }
+  - { id: 1435957248, name: "Drafts" }
+  - { id: 1465439395, name: "Dark Noise" }
+  - { id: 1358823008, name: "Flighty" }
+  - { id: 1502839586, name: "Hand Mirror" }
+  - { id: 1303222628, name: "Paprika" }
+  - { id: 1153157709, name: "Speedtest" }
+  - { id: 497799835, name:  "Xcode" }
