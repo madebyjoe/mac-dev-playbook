@@ -1,7 +1,11 @@
 ---
 - name: Setup Mac
-  hosts: all  # We'll use --limit to choose which profile
+  hosts: all
   become: false
+
+  # Ensure Homebrew paths are available for all tasks
+  environment:
+    PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
   vars:
     # Combine core + profile-specific packages
@@ -15,11 +19,27 @@
       debug:
         msg:
           - "Profile: {{ group_names }}"
-          - "Core packages: {{ core_homebrew_packages | default([]) | length }}"
-          - "Profile packages: {{ profile_homebrew_packages | default([]) | length }}"
-          - "Total packages to install: {{ homebrew_packages | length }}"
-          - "Total casks to install: {{ homebrew_cask_apps | length }}"
-      tags: ['debug']
+          - "Total packages: {{ homebrew_packages | length }}"
+          - "Total casks: {{ homebrew_cask_apps | length }}"
+          - "Total MAS apps: {{ mas_apps | length }}"
+
+    - name: Ensure Rosetta 2 is installed (Apple Silicon only)
+      block:
+        - name: Check CPU architecture
+          command: uname -m
+          register: cpu_arch
+          changed_when: false
+
+        - name: Check for Rosetta 2
+          stat:
+            path: /Library/Apple/usr/share/rosetta/rosetta
+          register: rosetta_check
+
+        - name: Install Rosetta 2
+          command: softwareupdate --install-rosetta --agree-to-license
+          when: not rosetta_check.stat.exists
+
+      when: ansible_architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
 
     - name: Ensure Homebrew is installed
       stat:
@@ -38,27 +58,31 @@
       loop: "{{ homebrew_taps }}"
       register: tap_result
       failed_when: false  # Don't stop on errors
+      tags: ['homebrew']
       
     - name: Show tap errors
       debug:
         msg: "Failed to tap {{ item.item }}: {{ item.msg | default('Unknown error') }}"
       loop: "{{ tap_result.results }}"
       when: item.failed | default(false)
+      tags: ['homebrew']
 
     - name: Ensure CLI packages are installed
       community.general.homebrew:
         name: "{{ item }}"
         state: present
-        update_homebrew: false  # Only update once, not per package
+        update_homebrew: false
       loop: "{{ homebrew_packages }}"
       register: package_result
       failed_when: false
+      tags: ['homebrew']
 
     - name: Show package errors
       debug:
         msg: "Failed to install {{ item.item }}: {{ item.msg | default('Unknown error') }}"
       loop: "{{ package_result.results }}"
       when: item.failed | default(false)
+      tags: ['homebrew']
 
     - name: Ensure Cask applications are installed
       community.general.homebrew_cask:
@@ -68,29 +92,51 @@
       loop: "{{ homebrew_cask_apps }}"
       register: cask_result
       failed_when: false
-      async: 600  # 10 minute timeout per cask
-      poll: 10    # Check every 10 seconds
+      tags: ['homebrew']
 
-    - name: Show cask errors
+    - name: Check if mas is installed (required for App Store apps)
+      stat:
+        path: /opt/homebrew/bin/mas
+      register: mas_binary
+      when: mas_apps | length > 0
+      tags: ['mas']
+
+    - name: Install mas if not present (should have been installed earlier)
+      community.general.homebrew:
+        name: mas
+        state: present
+      when: 
+        - mas_apps | length > 0
+        - not mas_binary.stat.exists
+      tags: ['mas']
+
+    - name: Check if signed into App Store
+      command: /opt/homebrew/bin/mas account
+      register: mas_account
+      failed_when: false
+      changed_when: false
+      when: mas_apps | length > 0
+      tags: ['mas']
+
+    - name: Warning if not signed into App Store
       debug:
-        msg: "Failed to install {{ item.item }}: {{ item.msg | default('Unknown error') }}"
-      loop: "{{ cask_result.results }}"
-      when: item.failed | default(false)
+        msg: "WARNING: Not signed into App Store. MAS apps will fail. Sign in via App Store GUI first."
+      when:
+        - mas_apps | length > 0
+        - mas_account.rc != 0
+      tags: ['mas']
 
     - name: Install Mac App Store apps
       community.general.mas:
         id: "{{ item.id }}"
         state: present
       loop: "{{ mas_apps }}"
-      when: mas_apps | length > 0
+      when: 
+        - mas_apps | length > 0
+        - mas_account.rc == 0
       register: mas_result
       failed_when: false
-
-    - name: Show MAS errors
-      debug:
-        msg: "Failed to install {{ item.item.name }}: {{ item.msg | default('Unknown error') }}"
-      loop: "{{ mas_result.results | default([]) }}"
-      when: item.failed | default(false)
+      tags: ['mas']
 
     - name: Summary of failures
       debug:
@@ -99,3 +145,9 @@
           - "Failed taps: {{ tap_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
           - "Failed packages: {{ package_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
           - "Failed casks: {{ cask_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
+    
+    # Configuration tasks
+    - name: Configure Ollama
+      import_tasks: tasks/configure-ollama.yml
+      when: "'ollama' in homebrew_packages"
+      tags: ['config', 'ollama']

@@ -1,21 +1,8 @@
 ---
 profile_homebrew_taps: []
 
-profile_homebrew_packages:
-  - docker
-  - docker-compose
-  - node
-  - maven
-  - jenv
-  - pyenv
+profile_homebrew_packages: []
 
-profile_homebrew_cask_apps:
-  - slack
-  - zoom
-  - visual-studio-code
-  - docker
-  - sourcetree
-  - android-studio
-  - iterm2
+profile_homebrew_cask_apps: []
 
 profile_mas_apps: []

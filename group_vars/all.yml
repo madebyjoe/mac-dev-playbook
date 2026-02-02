@@ -16,6 +16,7 @@ core_homebrew_packages:
   - fprobe
   - git
   - grep
+  - htop
   - jenv
   - mackup
   - mas
@@ -30,6 +31,7 @@ core_homebrew_packages:
   - pkg-config
   - pipx
   - pyenv
+  - screen
   - speedtest-cli
   - svn
   - tree
@@ -59,7 +61,6 @@ core_homebrew_cask_apps:
   - rectangle
   - slack
   - sourcetree
-  - spotify
   - sublime-text
   - the-unarchiver
   - visual-studio-code

@@ -2,13 +2,36 @@
 profile_homebrew_taps: []
 
 profile_homebrew_packages:
-  - mosh
-  - ncdu
-  - docker
-  - docker-compose
-  - tmux
-  - htop
+  - tailscale
+ 
 
-profile_homebrew_cask_apps: []  # No GUI
+profile_homebrew_cask_apps: # Remote GUI
+  # Gaming
+  - chiaki
+  - dolphin
+  - moonlight
+  - steam
+  # Engr
+  - eagle
+  - nextcloud
+  - parsec
+  - prusaslicer
+  - syncthing
+  - transmission
+  - ultimaker-cura
 
-profile_mas_apps: []
+
+profile_mas_apps:
+  - { id: 497799835, name:  "Xcode" }
+
+# Ollama configuration
+ollama_host: "0.0.0.0:11434"  # Listen on all interfaces
+ollama_models:
+  - gpt-oss:20b
+  - qwen3-coder:30b
+  - qwen2.5-coder:7b
+  - qwen2.5-coder:14b
+  - qwen2.5-coder:32b
+  - llama3.1:8b
+  - gemma3:12b
+  - gemma3:27b

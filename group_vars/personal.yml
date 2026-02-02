@@ -2,29 +2,11 @@
 profile_homebrew_taps: []
 
 profile_homebrew_packages:
-  - ansible
-  - chezmoi
-  - colima
-  - docker
-  - docker-buildx
-  - docker-compose
-  - ffmpeg
-  - flac
-  - jenv
-  - mackup
-  - maven
-  - mosh
-  - ncdu
-  - node
-  - ollama
-  - pandoc
-  - pyenv
-  - speedtest-cli
-  - yt-dlp
+  - tailscale
 
 profile_homebrew_cask_apps:
   # Emulation
-  # - chiaki
+  - chiaki # requires rosetta 2 install
   - dolphin
   - moonlight
   # Personal
@@ -35,19 +17,18 @@ profile_homebrew_cask_apps:
   - coolterm
   - discord
   - dropbox
-  # - eagle
+  - eagle
   - fantastical
   - mqtt-explorer
-  # - mullvadvpn
-  # - nextcloud
+  - mullvad-vpn
+  - nextcloud
   - notion
-  # - parsec
+  - parsec
   - prusaslicer
   - roon
   - sketch
   - steam
   - syncthing
-  # - tailscale
   - ticktick
   - transmission
   - ultimaker-cura

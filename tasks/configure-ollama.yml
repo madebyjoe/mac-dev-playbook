@@ -1,0 +1,58 @@
+---
+- name: Check if Ollama is installed
+  command: which ollama
+  register: ollama_check
+  failed_when: false
+  changed_when: false
+
+- name: Create Ollama service directory (for launchd)
+  file:
+    path: ~/Library/LaunchAgents
+    state: directory
+    mode: '0755'
+  when: ollama_check.rc == 0
+
+- name: Check if Ollama service already exists
+  stat:
+    path: ~/Library/LaunchAgents/com.ollama.plist
+  register: ollama_plist_exists
+  when: ollama_check.rc == 0
+
+- name: Unload existing Ollama service (if it exists)
+  command: launchctl unload ~/Library/LaunchAgents/com.ollama.plist
+  when:
+    - ollama_check.rc == 0
+    - ollama_plist_exists.stat.exists
+  failed_when: false
+  changed_when: false
+
+- name: Configure Ollama to accept external connections
+  template:
+    src: templates/ollama.plist.j2
+    dest: ~/Library/LaunchAgents/com.ollama.plist
+    mode: '0644'
+  when: ollama_check.rc == 0
+
+- name: Load Ollama service
+  command: launchctl load -w ~/Library/LaunchAgents/com.ollama.plist
+  when: ollama_check.rc == 0
+  changed_when: false
+
+- name: Wait for Ollama to be ready
+  wait_for:
+    host: localhost
+    port: 11434
+    timeout: 30
+  when: ollama_check.rc == 0
+
+- name: Pull default Ollama models
+  command: ollama pull {{ item }}
+  loop: "{{ ollama_models | default([]) }}"
+  when: 
+    - ollama_check.rc == 0
+    - ollama_models is defined
+    - ollama_models | length > 0
+  register: ollama_pull
+  changed_when: "'pulling manifest' in ollama_pull.stdout"
+  async: 1800  # 30 minutes per model
+  poll: 30

@@ -2,19 +2,23 @@
 
 This playbook installs and configures most of the software I use on my Mac for web and software development. Some things in macOS are slightly difficult to automate, so I still have a few manual installation steps, but at least it's all documented here.
 
+## Good Prerequisites
+
+Some things are not possible to bootstrap remotely on mac os and as such these are the minimum steps that will make it easier to automate the rest of the playbook.
+
+- Sign into Apple Account. That means iCloud, AppStore at least. 
+- Follow the instructions below for remote install by turning on "Remote Login".
+- Copy your current ssh key to the other device with `ssh-copy-id user@host`
+- Change the battery settings to never sleep if this is going to be a headless laptop install.
+- If you can get one of those HDMI dummy plugs, then you don't have to worry about virtual displays and other quirks when using remote desktop. It's worth it.
+
 ## Installation
 
   1. Ensure Apple's command line tools are installed (`xcode-select --install` to launch the installer).
   2. [Install Ansible](https://docs.ansible.com/ansible/latest/installation_guide/index.html):
-
-     1. Run the following command to add Python 3 to your $PATH: `export PATH="$HOME/Library/Python/3.9/bin:/opt/homebrew/bin:$PATH"`
-     2. Upgrade Pip: `sudo pip3 install --upgrade pip`
-     3. Install Ansible: `pip3 install ansible`
-
   3. Clone or download this repository to your local drive.
-  4. Run `ansible-galaxy collection install community.general`
   4. Run `ansible-galaxy install -r requirements.yml` inside this directory to install required Ansible roles.
-  5. Run `ansible-playbook main.yml --ask-become-pass` inside this directory. Enter your macOS account password when prompted for the 'BECOME' password.
+  5. Run `ansible-playbook main.yml --limit personal` (with options for `personal, work, headless`) inside this directory. Enter your macOS account password when prompted for the 'BECOME' password.
 
 > Note: If some Homebrew commands fail, you might need to agree to Xcode's license or fix some other Brew issue. Run `brew doctor` to see if this is the case.
 
@@ -35,10 +39,20 @@ Then edit the `inventory` file in this repository and change the line that start
 [ip address or hostname of mac]  ansible_user=[mac ssh username]
 ```
 
+It makes sense to do this with the `headless` profile as that was what it was designed for.
+
 If you need to supply an SSH password (if you don't use SSH keys), make sure to pass the `--ask-pass` parameter to the `ansible-playbook` command.
 
 ### Running a specific set of tagged tasks
 
-You can filter which part of the provisioning process to run by specifying a set of tags using `ansible-playbook`'s `--tags` flag. The tags available are `dotfiles`, `homebrew`, `mas`, `extra-packages` and `osx`.
+You can filter which part of the provisioning process to run by specifying a set of tags using `ansible-playbook`'s `--tags` flag. The tags available are `dotfiles`, `homebrew`, `mas`, `extra-packages`, `config`, `ollama`, and `osx`.
 
     ansible-playbook main.yml -K --tags "dotfiles,homebrew"
+
+## Post Installation
+
+Some things can be configured automatically from the playbook but a bunch of things require login directly.
+
+1. Get your remote desktop logged into. This playbook uses Parsec
+2. Get tailscale authorized by setting up the tailscale client and auth on device.
+3. Log into all of the other things that require GUI access
