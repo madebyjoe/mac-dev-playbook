@@ -52,7 +52,9 @@ core_homebrew_cask_apps:
   - bitwarden
   - firefox
   - ghostty
+  - helium-browser
   - iterm2
+  - localsend
   - lm-studio
   - jordanbaird-ice
   - obsidian

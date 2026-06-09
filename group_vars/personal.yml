@@ -14,7 +14,10 @@ profile_homebrew_cask_apps:
   - airtable
   - arduino-ide
   - cardhop
+  - claude-code
+  - codex
   - coolterm
+  - cursor
   - discord
   - dropbox
   - eagle
