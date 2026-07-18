@@ -4,6 +4,7 @@
   register: ollama_check
   failed_when: false
   changed_when: false
+  check_mode: false  # read-only probe; must run under --check so the block gates correctly
 
 - name: Configure Ollama launchd service
   when: ollama_check.rc == 0
