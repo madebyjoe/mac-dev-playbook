@@ -10,9 +10,10 @@ ratified/open so it lives with the code.
 - **F6.1 (supersedes F6) — FIXED.** Ollama is the primary engine on all Mac
   inference nodes (MLX backend; fastest for the whole `small` role). llama.cpp
   (`engine: llamacpp`) is the ratified **second** engine for HF-only
-  distributions, custom quants, and measured long-context `medium` work. The v1
-  planner stays ollama-only; `llamacpp` entries are surfaced as **pending T14**.
-  "Switch to llama.cpp for MLX" is a category error and is not relitigated.
+  distributions, custom quants, and measured long-context `medium` work. It is
+  **implemented as of T14** (planner plans both engines; per-model `llama-server`
+  launchd services). "Switch to llama.cpp for MLX" is a category error and is not
+  relitigated.
 
 ## Gates
 

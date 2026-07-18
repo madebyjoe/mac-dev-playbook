@@ -24,11 +24,10 @@ G25. After a live pull, a verify step compares actual vs declared size and warns
 backend is MLX — fastest for the whole `small` role). **llama.cpp** (`engine:
 llamacpp`) is the ratified **second** engine for HF-only distributions, custom
 quants, and long-context `medium` work where MLX's TTFT penalty is measured to be
-unacceptable; its pull/serve support is **planned as T14** and not yet
-implemented. The **v1 planner is ollama-only**: it pulls/verifies `ollama`
-entries and *skips* everything else with a notice — `llamacpp` entries appear
-under a distinct **"pending T14"** sub-heading (visible as planned work), while
-`whisper` / `mlx_hf` / `none` appear under "engine not implemented". No engine
+unacceptable; it is **implemented as of T14** (pull via `huggingface-cli`, per-model
+`llama-server` launchd services — see `runbooks/llamacpp.md`). The planner now
+plans **both** engines against the shared disk budget. `whisper` / `mlx_hf` /
+`none` remain unimplemented and appear under "engine not implemented". No engine
 choice is a category error to relitigate — see the rationale in the amendment.
 
 ## Commands

@@ -7,9 +7,10 @@
 # Fields:
 #   name      — exact pull tag
 #   engine    — ollama | llamacpp | whisper | mlx_hf | none
-#               (v1 planner implements ollama only; llamacpp is ratified planned
-#                work — T14, Amendment 1, surfaced under a "pending T14"
-#                sub-heading; whisper/mlx_hf/none are skipped with notice)
+#               (the planner implements ollama and llamacpp — T14, Amendment 1;
+#                whisper/mlx_hf/none are skipped with notice)
+#               llamacpp entries also carry: hf_repo, quant_file, port
+#               (see the ports: registry below to avoid port collisions)
 #   size_gb   — declared download size, used by the planner
 #   role      — small (M1 Pro 32GB) | medium (M4 Pro 48GB) | either
 #   priority  — lower pulls first, per role

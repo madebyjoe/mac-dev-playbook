@@ -91,3 +91,15 @@ want them gone. The router on Unraid is never touched by this repo.
 Pure additions with no machine state. `git revert <T12>` removes `.ansible-lint`
 and the CI workflow (and would reintroduce the lint findings the commit fixed);
 `git revert <T13>` removes the runbooks and their README links.
+
+## Phase 3b — llama.cpp engine (T14, Amendment 1)
+
+Additive and non-destructive, like the rest of the model system. `git revert`
+of the T14 commits removes the llamacpp planner support, the
+`templates/llamacpp-server.plist.j2` template, `tasks/configure-llamacpp.yml`,
+the pull dispatch, and the router extension; after reverting, llamacpp entries go
+back to being skipped-with-notice. The one external state is the per-model
+launchd services: to remove one, `launchctl bootout "gui/$(id -u)/com.llamacpp.<safe-name>"`
+and delete `~/Library/LaunchAgents/com.llamacpp.<safe-name>.plist`. **Downloaded
+GGUFs in `~/.cache/llamacpp/models/` are never deleted by any code path** — remove
+them by hand if you want the space back.
