@@ -18,6 +18,19 @@ current `model_manifest.yml` is **SYNTHETIC** (Standing Rule 2); replace it via
 G25. After a live pull, a verify step compares actual vs declared size and warns on
 >20% divergence so the manifest can be corrected.
 
+## Engine policy (F6.1, Amendment 1)
+
+**Ollama is the primary engine** on all Mac inference nodes (its Apple Silicon
+backend is MLX — fastest for the whole `small` role). **llama.cpp** (`engine:
+llamacpp`) is the ratified **second** engine for HF-only distributions, custom
+quants, and long-context `medium` work where MLX's TTFT penalty is measured to be
+unacceptable; its pull/serve support is **planned as T14** and not yet
+implemented. The **v1 planner is ollama-only**: it pulls/verifies `ollama`
+entries and *skips* everything else with a notice — `llamacpp` entries appear
+under a distinct **"pending T14"** sub-heading (visible as planned work), while
+`whisper` / `mlx_hf` / `none` appear under "engine not implemented". No engine
+choice is a category error to relitigate — see the rationale in the amendment.
+
 ## Commands
 
 ```sh

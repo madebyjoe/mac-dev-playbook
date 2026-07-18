@@ -72,6 +72,7 @@ Work-profile machines never get Ollama configured at all (see the work guard in 
 - [runbooks/ollama.md](runbooks/ollama.md) — the Ollama launchd service: where it binds and why, restart/stop, logs, rollback.
 - [runbooks/model-management.md](runbooks/model-management.md) — the model manifest schema, running the storage-aware planner, and how eviction recommendations are handled (by you).
 - [docs/rollback-notes.md](docs/rollback-notes.md) — per-task rollback procedures.
+- [docs/decision-gates.md](docs/decision-gates.md) — engine policy (F6.1) and the status of decision gates G25–G29.
 
 ## Post Installation
 

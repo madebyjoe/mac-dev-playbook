@@ -31,6 +31,28 @@ curl -s http://127.0.0.1:11434/api/tags        # loopback host
 tail -f ~/Library/Logs/ollama/ollama.log
 ```
 
+## Apple Silicon backend: MLX vs GGML (Amendment 1 A4.5)
+
+As of Ollama 0.19 the Apple Silicon backend is **MLX**, which is why the manifest
+`small`-role tags are the `-mlx` artifacts (20–87% faster than GGML-Metal below
+14B). MLX documents a **32 GB unified-memory floor**, and the M1 Pro sits exactly
+at it: if MLX fails to activate there, the node **silently falls back to GGML**.
+So after any Ollama upgrade, **verify which backend is actually running on the
+M1 Pro and record it here** — trust the observed backend over any article
+claiming the preview is M5-only.
+
+```sh
+# The backend is reported in the ollama server logs at startup / first load.
+grep -iE 'mlx|ggml|metal' ~/Library/Logs/ollama/ollama.log | tail -20
+```
+
+**Observed backend (M1 Pro, update after each upgrade):** _not yet recorded._
+
+> MLX does a full prefill before the first token, so TTFT grows linearly with
+> input length. That penalty is the measurement trigger for routing long-context
+> `medium` jobs to llama.cpp instead (F6.1, pending T14) — see
+> `runbooks/model-management.md`.
+
 ## Rollback
 
 See `docs/rollback-notes.md` (T7). In short: `launchctl bootout` the new label,
