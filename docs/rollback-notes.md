@@ -85,3 +85,9 @@ reverting the code does not touch them. To stop pulling without reverting, leave
 live under `artifacts/` (gitignored) and are never applied by the playbook, so
 reverting has no external effect; delete `artifacts/litellm/*.yml` by hand if you
 want them gone. The router on Unraid is never touched by this repo.
+
+## Phase 4 — CI, runbooks, docs
+
+Pure additions with no machine state. `git revert <T12>` removes `.ansible-lint`
+and the CI workflow (and would reintroduce the lint findings the commit fixed);
+`git revert <T13>` removes the runbooks and their README links.

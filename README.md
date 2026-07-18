@@ -55,7 +55,7 @@ If you need to supply an SSH password (if you don't use SSH keys), make sure to 
 
 ### Running a specific set of tagged tasks
 
-You can filter which part of the provisioning process to run by specifying a set of tags using `ansible-playbook`'s `--tags` flag. The tags available are `homebrew`, `mas`, `config`, and `ollama`.
+You can filter which part of the provisioning process to run by specifying a set of tags using `ansible-playbook`'s `--tags` flag. The tags available are `homebrew`, `mas`, `config`, `ollama`, `models`, `litellm`, and `power`.
 
     ansible-playbook main.yml --limit personal --tags "homebrew"
 
@@ -65,7 +65,13 @@ The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default**.
 
 - `ollama_bind` — the `OLLAMA_HOST` value written into the plist (e.g. `100.x.y.z:11434` for a tailnet IP). Set via inference-role group_vars, not per profile.
 
-Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). Full inference-role wiring (`inference_small` / `inference_medium` groups, keep-alive, model manifest) arrives in a later phase.
+Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). To make a host serve inference, add it to an `inference_small` or `inference_medium` group in the `inventory` (with `tailnet_ip`/`tailnet_name`); that turns on the tailnet bind, keeps the model resident, drives storage-aware model pulls, and emits a LiteLLM router snippet into `artifacts/litellm/`. See the runbooks below.
+
+## Runbooks
+
+- [runbooks/ollama.md](runbooks/ollama.md) — the Ollama launchd service: where it binds and why, restart/stop, logs, rollback.
+- [runbooks/model-management.md](runbooks/model-management.md) — the model manifest schema, running the storage-aware planner, and how eviction recommendations are handled (by you).
+- [docs/rollback-notes.md](docs/rollback-notes.md) — per-task rollback procedures.
 
 ## Post Installation
 
