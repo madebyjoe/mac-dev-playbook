@@ -23,8 +23,25 @@ mac-headless ansible_connection=local
 # line above and use an SSH alias like:
 # mac-headless ansible_host={remote-ip} ansible_user={client-username} ansible_connection=ssh
 
-# Inference-role groups (Brief Phase 3) are orthogonal to profiles and are
-# defined further down once Phase 3 lands.
+# Inference-role groups (F4) are ORTHOGONAL to profiles. A host may be in one
+# profile group and AT MOST ONE inference-role group. Inference configuration
+# (bind, keep-alive, model manifest selection) keys off membership here, never
+# off "ollama happens to be installed". Both are empty by default.
+#
+# A host that joins a role must set its tailnet identity so the bind and the
+# LiteLLM snippet resolve:
+#   tailnet_ip   -> OLLAMA_HOST bind (e.g. 100.x.y.z)
+#   tailnet_name -> LiteLLM api_base host (e.g. mac-headless.tailXXXX.ts.net)
+#
+# Example: make the headless box a small inference node.
+#   [inference_small]
+#   mac-headless tailnet_ip=100.64.0.10 tailnet_name=mac-headless.tailnet.ts.net
+[inference_small]
+
+# Example: make a beefier box (M4 Pro) a medium inference node.
+#   [inference_medium]
+#   mac-headless tailnet_ip=100.64.0.11 tailnet_name=mac-studio.tailnet.ts.net
+[inference_medium]
 
 # All profiles get core packages.
 [profiles:children]

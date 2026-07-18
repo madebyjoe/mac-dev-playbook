@@ -1,0 +1,20 @@
+---
+# Inference role: SMALL node (F4 — e.g. M1 Pro). Orthogonal to profile.
+# Membership in this group (not "ollama is installed") is what turns a machine
+# into a small inference backend. A host is in AT MOST ONE inference-role group.
+
+# Bind Ollama on the host's Tailscale interface so LiteLLM on Unraid reaches it
+# over the tailnet. Set `tailnet_ip` per host in the inventory. If it is unset,
+# the bind stays on loopback (fail-safe: never silently expose 0.0.0.0).
+ollama_bind: "{{ tailnet_ip | default('127.0.0.1') }}:11434"
+
+# Keep the resident model loaded indefinitely (G19 latency requirement).
+ollama_keep_alive: -1
+
+# Manifest roles this node may pull. Manifest entries with role `either` also
+# qualify; entries with role `medium` do not.
+model_roles:
+  - small
+
+# Free space (GB) that must remain after pulls (G26). Overridable per host.
+reserve_floor_gb: 100
