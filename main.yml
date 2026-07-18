@@ -211,6 +211,13 @@
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'models']
 
+    - name: Emit LiteLLM router snippet
+      import_tasks: tasks/litellm-artifact.yml
+      when: >-
+        ('work' not in group_names) and
+        (('inference_small' in group_names) or ('inference_medium' in group_names))
+      tags: ['ollama', 'litellm']
+
   handlers:
     # Bounce the Ollama service only when the plist actually changed (F7).
     # bootout + bootstrap in the gui/$UID domain replaces deprecated

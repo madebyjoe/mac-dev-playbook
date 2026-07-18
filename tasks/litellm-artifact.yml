@@ -1,0 +1,32 @@
+---
+# Emit a LiteLLM model_list snippet for this inference node (F8). The playbook
+# only writes the artifact into artifacts/litellm/ (gitignored); the human
+# applies it on the Unraid LiteLLM host. No task ever reaches across to Unraid.
+
+- name: Resolve this host's inference role
+  set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
+
+- name: Emit LiteLLM router snippet
+  when: inference_role != ''
+  block:
+    - name: Load the model manifest
+      include_vars:
+        file: "{{ playbook_dir }}/model_manifest.yml"
+        name: manifest
+
+    - name: Select the ollama models this node serves for its role
+      set_fact:
+        litellm_models: "{{ manifest.models | selectattr('engine', 'equalto', 'ollama') | selectattr('role', 'in', [inference_role, 'either']) | list }}"
+
+    - name: Ensure the artifacts directory exists
+      file:
+        path: "{{ playbook_dir }}/artifacts/litellm"
+        state: directory
+        mode: '0755'
+
+    - name: Render the LiteLLM model_list snippet
+      template:
+        src: templates/litellm-snippet.yml.j2
+        dest: "{{ playbook_dir }}/artifacts/litellm/{{ inventory_hostname }}.yml"
+        mode: '0644'

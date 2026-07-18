@@ -1,2 +1,4 @@
 hosts.local
 *.retry
+# Generated LiteLLM router snippets (F8) — emitted, applied by the human on Unraid.
+artifacts/
