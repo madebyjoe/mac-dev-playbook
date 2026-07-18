@@ -24,7 +24,7 @@ core_homebrew_packages:
   - mosh
   - ncdu
   - node
-  - ollama
+  # ollama moved to personal + headless profiles (F3: work never gets inference)
   - opencode
   - pandoc
   - pdf-diff
@@ -55,7 +55,7 @@ core_homebrew_cask_apps:
   - helium-browser
   - iterm2
   - localsend
-  - lm-studio
+  # lm-studio moved to personal + headless profiles (F3: work never gets inference)
   - jordanbaird-ice
   - obsidian
   - orbstack

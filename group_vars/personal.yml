@@ -2,9 +2,12 @@
 profile_homebrew_taps: []
 
 profile_homebrew_packages:
+  - ollama  # inference engine (F3: not in core; work never gets it)
   - tailscale
 
 profile_homebrew_cask_apps:
+  # Inference
+  - lm-studio
   # Emulation
   - chiaki # requires rosetta 2 install
   - dolphin

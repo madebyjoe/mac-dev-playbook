@@ -150,5 +150,9 @@
     # Configuration tasks
     - name: Configure Ollama
       import_tasks: tasks/configure-ollama.yml
-      when: "'ollama' in homebrew_packages"
+      # F3: work-profile (MDM-managed) machines never serve inference. Guard on
+      # group membership in addition to the package condition.
+      when:
+        - "'ollama' in homebrew_packages"
+        - "'work' not in group_names"
       tags: ['config', 'ollama']
