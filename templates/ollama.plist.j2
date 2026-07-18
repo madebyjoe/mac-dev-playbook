@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ollama</string>
+    <string>com.ollama.serve</string>
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/ollama</string>
@@ -19,14 +19,19 @@
             Unraid reaches the backend over the tailnet -- never 0.0.0.0. The
             work VLAN is a backstop, not the access control. -#}
         <string>{{ ollama_bind | default('127.0.0.1:11434') }}</string>
+{% if ollama_keep_alive is defined %}
+        {#- Inference-role hosts pin the model resident (-1) for G19 latency. -#}
+        <key>OLLAMA_KEEP_ALIVE</key>
+        <string>{{ ollama_keep_alive }}</string>
+{% endif %}
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/ollama.log</string>
+    <string>{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}/ollama.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/ollama.err</string>
+    <string>{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}/ollama.err</string>
 </dict>
 </plist>

@@ -5,54 +5,50 @@
   failed_when: false
   changed_when: false
 
-- name: Create Ollama service directory (for launchd)
-  file:
-    path: ~/Library/LaunchAgents
-    state: directory
-    mode: '0755'
+- name: Configure Ollama launchd service
   when: ollama_check.rc == 0
+  block:
+    - name: Ensure LaunchAgents directory exists
+      file:
+        path: "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        state: directory
+        mode: '0755'
 
-- name: Check if Ollama service already exists
-  stat:
-    path: ~/Library/LaunchAgents/com.ollama.plist
-  register: ollama_plist_exists
-  when: ollama_check.rc == 0
+    - name: Ensure Ollama log directory exists
+      file:
+        path: "{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}"
+        state: directory
+        mode: '0755'
 
-- name: Unload existing Ollama service (if it exists)
-  command: launchctl unload ~/Library/LaunchAgents/com.ollama.plist
-  when:
-    - ollama_check.rc == 0
-    - ollama_plist_exists.stat.exists
-  failed_when: false
-  changed_when: false
+    # Templating the plist only NOTIFIES the restart handler. The service is
+    # bounced (bootout + bootstrap, dropping resident models) exclusively when
+    # the rendered plist actually changes -- not on every run (F7).
+    - name: Template Ollama launchd plist
+      template:
+        src: templates/ollama.plist.j2
+        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+        mode: '0644'
+      notify: restart ollama
 
-- name: Configure Ollama to accept external connections
-  template:
-    src: templates/ollama.plist.j2
-    dest: ~/Library/LaunchAgents/com.ollama.plist
-    mode: '0644'
-  when: ollama_check.rc == 0
+    # Idempotent load: bootstrap the service only if it is not already loaded.
+    # This does NOT bounce a running service, so residency is preserved.
+    - name: Ensure Ollama service is bootstrapped
+      shell: |
+        uid=$(id -u)
+        if ! launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1; then
+          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+          echo bootstrapped
+        fi
+      register: ollama_bootstrap
+      changed_when: "'bootstrapped' in ollama_bootstrap.stdout"
 
-- name: Load Ollama service
-  command: launchctl load -w ~/Library/LaunchAgents/com.ollama.plist
-  when: ollama_check.rc == 0
-  changed_when: false
-
-- name: Wait for Ollama to be ready
-  wait_for:
-    host: localhost
-    port: 11434
-    timeout: 30
-  when: ollama_check.rc == 0
-
-- name: Pull default Ollama models
-  command: ollama pull {{ item }}
-  loop: "{{ ollama_models | default([]) }}"
-  when: 
-    - ollama_check.rc == 0
-    - ollama_models is defined
-    - ollama_models | length > 0
-  register: ollama_pull
-  changed_when: "'pulling manifest' in ollama_pull.stdout"
-  async: 1800  # 30 minutes per model
-  poll: 30
+    # Inference nodes must not sleep on AC or they drop off the tailnet. Applied
+    # only to hosts in an inference-role group (F4); requires root.
+    - name: Prevent system sleep on AC power (inference nodes only)
+      become: true
+      command: pmset -c sleep 0
+      when: >-
+        ('inference_small' in group_names) or
+        ('inference_medium' in group_names)
+      changed_when: false
+      tags: ['power']

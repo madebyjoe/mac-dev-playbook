@@ -156,3 +156,14 @@
         - "'ollama' in homebrew_packages"
         - "'work' not in group_names"
       tags: ['config', 'ollama']
+
+  handlers:
+    # Bounce the Ollama service only when the plist actually changed (F7).
+    # bootout + bootstrap in the gui/$UID domain replaces deprecated
+    # launchctl unload/load; runs as the user, no root needed.
+    - name: restart ollama
+      shell: |
+        uid=$(id -u)
+        launchctl bootout "gui/${uid}/com.ollama.serve" 2>/dev/null || true
+        launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+      changed_when: true
