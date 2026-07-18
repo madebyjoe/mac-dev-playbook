@@ -34,11 +34,52 @@ VERIFY_TOLERANCE = 0.20
 
 
 # --------------------------------------------------------------------------- #
-# Minimal YAML loader for the manifest subset (a single `models:` block list of
-# flat mappings with scalar values). Stdlib has no YAML parser and the brief
-# forbids pip deps, so we parse exactly the documented schema. Anything richer
-# (anchors, nested maps, multi-line scalars) is out of scope by design.
+# Minimal YAML loader for the manifest subset: a single `models:` list whose
+# entries are flat mappings, written either BLOCK style
+#   - name: foo
+#     engine: ollama
+# or FLOW style on one line
+#   - { name: foo, engine: ollama, notes: "commas, and colons: ok inside quotes" }
+# Stdlib has no YAML parser and the brief forbids pip deps, so we parse exactly
+# the documented schema. Anything richer (anchors, nested maps, multi-line
+# scalars) is out of scope by design.
 # --------------------------------------------------------------------------- #
+def _split_top_level_commas(text):
+    """Split on commas that are not inside single/double quotes."""
+    parts, buf, quote = [], [], None
+    for ch in text:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+
+def _parse_flow_mapping(text):
+    """Parse a one-line flow mapping `{ k: v, k: v, ... }` into a dict."""
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start + 1:end]
+    out = {}
+    for part in _split_top_level_commas(text):
+        part = part.strip()
+        if not part:
+            continue
+        k, v = _split_kv(part)
+        out[k] = v
+    return out
+
+
 def _split_kv(text):
     """Split 'key: value' on the first colon that is followed by space/EOL.
 
@@ -100,13 +141,17 @@ def load_manifest(path):
             continue
         body = line.lstrip(" ")
         if body.startswith("- "):
-            current = {}
-            models.append(current)
-            body = body[2:].strip()
-            if body:
-                k, v = _split_kv(body)
-                current[k] = v
-        elif current is not None:
+            item = body[2:].strip()
+            if item.startswith("{"):          # flow-style: complete on one line
+                models.append(_parse_flow_mapping(item))
+                current = None
+            else:                             # block-style: first key on this line
+                current = {}
+                models.append(current)
+                if item:
+                    k, v = _split_kv(item)
+                    current[k] = v
+        elif current is not None:             # continuation of a block-style entry
             k, v = _split_kv(body)
             current[k] = v
     return models
@@ -194,11 +239,23 @@ def build_plan(models, role, free_gb, reserve_floor_gb, present):
         if m_role not in (role, "either"):
             continue
         if engine != "ollama":
-            skipped.append({
-                "name": m.get("name"),
-                "engine": m.get("engine"),
-                "reason": "engine not implemented (v1 is ollama-only)",
-            })
+            # F6.1: llamacpp is the ratified second engine (planned as T14), so
+            # surface it separately from genuinely-unimplemented engines
+            # (whisper / mlx_hf / none) rather than burying it as noise.
+            if engine == "llamacpp":
+                skipped.append({
+                    "name": m.get("name"),
+                    "engine": m.get("engine"),
+                    "status": "pending_t14",
+                    "reason": "pending T14 (llama.cpp engine support)",
+                })
+            else:
+                skipped.append({
+                    "name": m.get("name"),
+                    "engine": m.get("engine"),
+                    "status": "not_implemented",
+                    "reason": "engine not implemented (v1 is ollama-only)",
+                })
             continue
         candidates.append(m)
 
@@ -306,17 +363,23 @@ def render_human(plan):
     L.append("")
     L.append("PULL (%d):" % len(plan["pull"]))
     for e in plan["pull"]:
-        L.append("  + %-28s %s GB  (priority %s)" % (e["name"], e["size_gb"], e["priority"]))
+        L.append("  + %-38s %s GB  (priority %s)" % (e["name"], e["size_gb"], e["priority"]))
     L.append("PRESENT / kept (%d):" % len(plan["present"]))
     for e in plan["present"]:
-        L.append("  = %-28s (already on disk, zero cost)" % e["name"])
+        L.append("  = %-38s (already on disk, zero cost)" % e["name"])
     L.append("DEFERRED / insufficient space (%d):" % len(plan["deferred"]))
     for e in plan["deferred"]:
-        L.append("  ! %-28s %s GB  short by %s GB  (priority %s)"
+        L.append("  ! %-38s %s GB  short by %s GB  (priority %s)"
                  % (e["name"], e["size_gb"], e["shortfall_gb"], e["priority"]))
-    L.append("SKIPPED / engine not implemented (%d):" % len(plan["skipped"]))
-    for e in plan["skipped"]:
-        L.append("  ~ %-28s engine=%s" % (e["name"], e["engine"]))
+    not_impl = [e for e in plan["skipped"] if e.get("status") != "pending_t14"]
+    pending = [e for e in plan["skipped"] if e.get("status") == "pending_t14"]
+    L.append("SKIPPED / engine not implemented (%d):" % len(not_impl))
+    for e in not_impl:
+        L.append("  ~ %-38s engine=%s" % (e["name"], e["engine"]))
+    if pending:
+        L.append("SKIPPED / pending T14 — llama.cpp (%d):" % len(pending))
+        for e in pending:
+            L.append("  … %-38s engine=%s" % (e["name"], e["engine"]))
     if plan["eviction_recommendations"]:
         L.append("EVICTION RECOMMENDATIONS (advisory only — nothing is deleted):")
         for r in plan["eviction_recommendations"]:

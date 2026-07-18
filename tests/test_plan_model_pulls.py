@@ -96,6 +96,19 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("mlx:7b", names(plan["skipped"]))
         self.assertNotIn("mlx:7b", names(plan["pull"]))
 
+    def test_llamacpp_categorized_pending_t14(self):
+        # F6.1: llamacpp is skipped but flagged as planned work (T14); other
+        # non-ollama engines are flagged as not implemented.
+        models = [M("cpp:1", "llamacpp", 5, "small", 1),
+                  M("whisper:1", "whisper", 1, "small", 1),
+                  M("ok:1", "ollama", 5, "small", 1)]
+        plan = planner.build_plan(models, "small",
+                                  free_gb=500, reserve_floor_gb=0, present={})
+        by_name = {e["name"]: e for e in plan["skipped"]}
+        self.assertEqual(by_name["cpp:1"]["status"], "pending_t14")
+        self.assertEqual(by_name["whisper:1"]["status"], "not_implemented")
+        self.assertNotIn("cpp:1", names(plan["pull"]))
+
     def test_reserve_floor_boundary_exact(self):
         # size exactly equals budget -> fits.
         models = [M("edge:1", "ollama", 5, "small", 1)]
@@ -131,16 +144,40 @@ class TestPlanning(unittest.TestCase):
 
 class TestManifestParsing(unittest.TestCase):
 
-    def test_loads_real_synthetic_manifest(self):
+    def test_parses_flow_style(self):
+        # The ratified G25 manifest is written flow-style, with commas and colons
+        # inside quoted notes.
+        content = (
+            "models:\n"
+            '  - { name: "qwen3.5:9b-mlx", engine: ollama, size_gb: 8.0,'
+            ' role: small, priority: 40, notes: "Primary alias, verify: 6.6GB" }\n'
+            '  - { name: "whisper-large-v3-turbo", engine: whisper, size_gb: 1.6,'
+            ' role: small, priority: 10, notes: "port 8082" }\n'
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+            fh.write(content)
+            path = fh.name
+        try:
+            models = planner.load_manifest(path)
+            self.assertEqual(len(models), 2)
+            self.assertEqual(models[0]["name"], "qwen3.5:9b-mlx")  # colon in name
+            self.assertEqual(models[0]["engine"], "ollama")
+            self.assertEqual(models[0]["size_gb"], 8.0)
+            self.assertEqual(models[0]["priority"], 40)
+            # comma AND colon inside the quoted notes survived the split.
+            self.assertEqual(models[0]["notes"], "Primary alias, verify: 6.6GB")
+            self.assertEqual(models[1]["engine"], "whisper")
+        finally:
+            os.unlink(path)
+
+    def test_shipped_manifest_parses(self):
+        # Content-agnostic: the shipped manifest parses and every entry carries
+        # the required schema fields. Does not assert specific models (they drift).
         models = planner.load_manifest(_MANIFEST)
-        self.assertEqual(len(models), 5)
-        first = models[0]
-        # colon in the model name must survive the key:value split.
-        self.assertEqual(first["name"], "synthetic-small-a:7b")
-        self.assertEqual(first["engine"], "ollama")
-        self.assertEqual(first["size_gb"], 5)
-        self.assertEqual(first["role"], "small")
-        self.assertEqual(first["priority"], 1)
+        self.assertGreater(len(models), 0)
+        for m in models:
+            for field in ("name", "engine", "size_gb", "role", "priority"):
+                self.assertIn(field, m, "%s missing %s" % (m.get("name"), field))
 
     def test_coerces_types(self):
         with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
