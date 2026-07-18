@@ -18,7 +18,17 @@ Some things are not possible to bootstrap remotely on mac os and as such these a
   2. [Install Ansible](https://docs.ansible.com/ansible/latest/installation_guide/index.html):
   3. Clone or download this repository to your local drive.
   4. Run `ansible-galaxy install -r requirements.yml` inside this directory to install required Ansible roles.
-  5. Run `ansible-playbook main.yml --limit personal` (with options for `personal, work, headless`) inside this directory. Enter your macOS account password when prompted for the 'BECOME' password.
+  5. Run the playbook for the profile you want (see below). Enter your macOS account password when prompted for the 'BECOME' password.
+
+> **`--limit` is mandatory.** Each profile (`personal`, `work`, `headless`) is a distinct host alias that all resolve to this machine. Ansible resolves variables per host, so without `--limit` every profile's variables merge together and profile-specific packages are silently dropped. Always pass exactly one profile:
+>
+> ```
+> ansible-playbook main.yml --limit personal
+> ansible-playbook main.yml --limit work
+> ansible-playbook main.yml --limit headless
+> ```
+>
+> Because all three aliases point at the same machine, `ansible all -m ping` reports three hosts on one Mac. This is cosmetic and expected.
 
 > Note: If some Homebrew commands fail, you might need to agree to Xcode's license or fix some other Brew issue. Run `brew doctor` to see if this is the case.
 
@@ -33,10 +43,10 @@ You can use this playbook to manage other Macs as well; the playbook doesn't eve
 >
 >     sudo systemsetup -setremotelogin on
 
-Then edit the `inventory` file in this repository and change the line that starts with `127.0.0.1` to:
+Then edit the `inventory` file in this repository. Under the `[headless]` group, comment out the local `mac-headless` line and use the SSH form (there is a commented example in the file):
 
 ```
-[ip address or hostname of mac]  ansible_user=[mac ssh username]
+mac-headless ansible_host=[ip or hostname of mac] ansible_user=[mac ssh username] ansible_connection=ssh
 ```
 
 It makes sense to do this with the `headless` profile as that was what it was designed for.

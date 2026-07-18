@@ -1,16 +1,32 @@
-# Define different profiles as groups, all pointing to localhost
+# Each profile is a DISTINCT host alias (all resolving to the local machine by
+# default). This is deliberate: Ansible resolves group_vars per host, so giving
+# every profile its own host stops work.yml's empty profile_* lists from
+# overriding personal/headless when the plays run.
+#
+# BECAUSE all three aliases are the same physical machine, `--limit` is
+# MANDATORY. Running `ansible-playbook main.yml` with no limit targets all three
+# aliases at once and merges every profile's variables. See README.
+#
+#   ansible-playbook main.yml --limit personal
+#   ansible-playbook main.yml --limit work
+#   ansible-playbook main.yml --limit headless
+
 [personal]
-localhost ansible_connection=local
+mac-personal ansible_connection=local
 
 [work]
-localhost ansible_connection=local
+mac-work ansible_connection=local
 
 [headless]
-localhost ansible_connection=local
-# Alternatively
-# {remote-ip}  ansible_user={client-username}
+mac-headless ansible_connection=local
+# To provision a *remote* headless Mac instead of this machine, comment out the
+# line above and use an SSH alias like:
+# mac-headless ansible_host={remote-ip} ansible_user={client-username} ansible_connection=ssh
 
-# All profiles should get core packages
+# Inference-role groups (Brief Phase 3) are orthogonal to profiles and are
+# defined further down once Phase 3 lands.
+
+# All profiles get core packages.
 [profiles:children]
 personal
 work
