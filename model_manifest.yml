@@ -1,60 +1,93 @@
----
-# ============================================================================
-# SYNTHETIC model manifest — replace via G25 (see BRIEF.md).
+# model_manifest.yml — G25 (ratified; human-provided). Adopted 2026-07-17.
+# Source of truth for storage-aware model provisioning (Handoff Brief, F5/F6.1).
+# Sizes are declared download sizes from the Ollama registry (verified July 2026)
+# unless marked "estimate — verify on first pull". Post-pull verification (T10)
+# reconciles declared vs. actual; >20% divergence gets written back here.
 #
-# These entries are EXAMPLES ONLY. They exist to exercise the planner's code
-# paths (fit / no-fit / priority ordering / present / non-ollama skip) and to
-# document the schema. They are NOT a curated preferred-model list. The human
-# supplies the real manifest (G25); until then everything downstream runs
-# against this synthetic data (Standing Rule 2).
-# ============================================================================
+# Fields:
+#   name      — exact pull tag
+#   engine    — ollama | llamacpp | whisper | mlx_hf | none
+#               (v1 planner implements ollama only; llamacpp is ratified planned
+#                work — T14, Amendment 1, surfaced under a "pending T14"
+#                sub-heading; whisper/mlx_hf/none are skipped with notice)
+#   size_gb   — declared download size, used by the planner
+#   role      — small (M1 Pro 32GB) | medium (M4 Pro 48GB) | either
+#   priority  — lower pulls first, per role
+#   notes     — RAM caveats, alias mapping, verify flags
 #
-# Schema — one mapping per entry under `models:`:
-#   name     : model tag exactly as the engine expects it (e.g. `ollama pull`).
-#   engine   : inference engine. v1 implements `ollama` ONLY (F6); entries with
-#              any other engine are parsed and SKIPPED with a notice, not an
-#              error, so the manifest can carry future llama.cpp / MLX / LM
-#              Studio models today.
-#   size_gb  : DECLARED on-disk size in GB. Deterministic-first — the planner
-#              trusts this for fit decisions rather than querying at runtime.
-#              Post-pull verification reconciles declared vs actual and warns on
-#              >20% divergence, feeding corrections back to the human.
-#   role     : which inference-role node may pull it — small | medium | either.
-#   priority : integer; LOWER pulls first (1 before 2). Ties broken by name.
-#   notes    : free text for the human.
+# PRIORITIES ARE A PROPOSAL — reorder to taste before ratifying G25.
+# RAM note: the planner is disk-aware, not RAM-aware. Role assignment is the RAM
+# control: nothing over ~10GB weights on the M1 Pro (32GB unified), and treat
+# 22–28GB weights as the practical ceiling on the M4 Pro (48GB) once KV cache
+# and the OS are accounted for. Concern flagged in Notes at bottom.
 
 models:
-  - name: synthetic-small-a:7b
-    engine: ollama
-    size_gb: 5
-    role: small
-    priority: 1
-    notes: "SYNTHETIC — small-role, highest priority."
 
-  - name: synthetic-either-b:8b
-    engine: ollama
-    size_gb: 8
-    role: either
-    priority: 2
-    notes: "SYNTHETIC — qualifies for both small and medium nodes."
+  # ── small role — M1 Pro (32GB) ────────────────────────────────────────────
+  - { name: "qwen3.5:0.8b-mlx",        engine: ollama, size_gb: 1.2,  role: small,  priority: 10, notes: "Verified. Tagging/extraction tier." }
+  - { name: "qwen3.5:2b-mlx",          engine: ollama, size_gb: 3.1,  role: small,  priority: 20, notes: "Verified." }
+  - { name: "qwen3.5:4b-mlx",          engine: ollama, size_gb: 4.2,  role: small,  priority: 30, notes: "Estimate — verify (GGUF is 3.4GB; MLX runs slightly larger)." }
+  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias candidate." }
+  - { name: "gemma4:e2b-mlx",          engine: ollama, size_gb: 7.2,  role: small,  priority: 50, notes: "GGUF size verified at 7.2GB; confirm MLX tag size on first pull." }
+  - { name: "gemma4:e4b-mlx",          engine: ollama, size_gb: 9.6,  role: small,  priority: 60, notes: "GGUF size verified; confirm MLX tag. Strong small-tier generalist w/ vision+audio." }
+  - { name: "ornith:9b",               engine: ollama, size_gb: 5.6,  role: small,  priority: 70, notes: "Verified. Agentic coding, Qwen3.5 base, MIT." }
+  - { name: "glm-ocr:latest",          engine: ollama, size_gb: 1.0,  role: small,  priority: 80, notes: "Estimate — 0.9B params; verify. Paperless/doc OCR assist." }
+  - { name: "translategemma:4b",       engine: ollama, size_gb: 3.3,  role: small,  priority: 90, notes: "Estimate — Gemma3-based; verify." }
 
-  - name: synthetic-medium-c:32b
-    engine: ollama
-    size_gb: 20
-    role: medium
-    priority: 1
-    notes: "SYNTHETIC — medium-role, highest priority."
+  # embeddings — small role; `embed` alias is a SCHEMA decision (changing the
+  # backing model invalidates all downstream vectors — see LiteLLM standing note)
+  - { name: "embeddinggemma:latest",   engine: ollama, size_gb: 0.6,  role: small,  priority: 100, notes: "Estimate — verify." }
+  - { name: "qwen3-embedding:0.6b",    engine: ollama, size_gb: 0.7,  role: small,  priority: 110, notes: "Estimate — verify." }
+  - { name: "qwen3-embedding:4b",      engine: ollama, size_gb: 2.6,  role: small,  priority: 120, notes: "Estimate — verify." }
+  - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, notes: "Estimate — verify." }
 
-  - name: synthetic-medium-d:70b
-    engine: ollama
-    size_gb: 40
-    role: medium
-    priority: 3
-    notes: "SYNTHETIC — large; exercises the deferred (insufficient space) path."
+  # ── medium role — M4 Pro (48GB) ───────────────────────────────────────────
+  - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, notes: "Verified 20GB. Dense 27B; primary `medium` alias candidate." }
+  - { name: "qwen3.6:35b-mlx",         engine: ollama, size_gb: 22,   role: medium, priority: 20, notes: "Verified 22GB. 35B-A3B MoE — faster than the 27B dense at similar quality." }
+  - { name: "glm-4.7-flash:latest",    engine: ollama, size_gb: 19,   role: medium, priority: 30, notes: "Verified. 30B-A3B MoE, MIT; requires Ollama >=0.14.3." }
+  - { name: "qwen3-coder:latest",      engine: ollama, size_gb: 19,   role: medium, priority: 40, notes: "Estimate — verify current :latest mapping (30B-A3B Q4 ~= 19GB)." }
+  - { name: "gemma4:26b-mlx",          engine: ollama, size_gb: 18,   role: medium, priority: 50, notes: "GGUF verified ~18GB; confirm MLX tag. MoE, 4B active." }
+  - { name: "gemma4:31b-mlx",          engine: ollama, size_gb: 20,   role: medium, priority: 60, notes: "GGUF verified ~20GB; confirm MLX tag. Dense — strongest Gemma tier." }
+  - { name: "gemma4:12b-mlx",          engine: ollama, size_gb: 9.0,  role: medium, priority: 70, notes: "Estimate — verify. 12B Unified adds AUDIO input (June 2026) — relevant to voice/media briefs." }
+  - { name: "ornith:35b",              engine: ollama, size_gb: 21,   role: medium, priority: 80, notes: "Verified. 35B MoE coding agent." }
+  - { name: "nemotron3:33b",           engine: ollama, size_gb: 28,   role: medium, priority: 90, notes: "Verified 28GB — LARGEST entry; tight on 48GB with long context. Omni: video+audio+image+OCR+transcription." }
+  - { name: "translategemma:12b",      engine: ollama, size_gb: 8.1,  role: medium, priority: 100, notes: "Estimate — verify." }
+  - { name: "translategemma:27b",      engine: ollama, size_gb: 17,   role: medium, priority: 110, notes: "Estimate — verify. Consider skipping if 12b quality suffices — 17GB for translation is steep." }
 
-  - name: synthetic-mlx-e:7b
-    engine: mlx
-    size_gb: 4
-    role: either
-    priority: 1
-    notes: "SYNTHETIC — non-ollama engine; planner SKIPS it in v1 (F6)."
+  # ── unfiltered classification/captioning — medium role, M4 Pro ONLY ───────
+  # These process the sensitive media corpus (Brief 4). Router enforcement:
+  # dedicated alias (proposed: `caption-unfiltered`) with virtual-key allow-list;
+  # Hermes and all non-sensitive-tagged pipelines must NOT be able to reach it.
+  - { name: "huihui_ai/Qwen3.6-abliterated:27b", engine: ollama, size_gb: 17, role: medium, priority: 120, notes: "Verified 17GB. TEXT-only abliterated — for classifying captions/descriptions without refusals." }
+  - { name: "prithivMLmods/Qwen3-VL-8B-Abliterated-Caption-it", engine: ollama, size_gb: 9.0, role: medium, priority: 130, notes: "G25 pick (Amendment 1 A1): engine=ollama per human decision. Upstream is an HF distribution — confirm an Ollama pull route resolves this tag on first pull, else revisit the llamacpp/mlx_hf route. Size estimate — verify. Uncensored VISION captioner for flagged media. Fallback if flaky: JoyCaption-class fine-tune." }
+
+  # ── transcription — non-ollama engines, listed for completeness (skipped by v1 planner) ──
+  - { name: "whisper-large-v3-turbo",  engine: whisper, size_gb: 1.6, role: small,  priority: 10, notes: "Backs the existing `transcribe` alias (Brief 9 FIXED). M1 Pro, launchd, port 8082." }
+  - { name: "parakeet-tdt-0.6b-v3",    engine: mlx_hf,  size_gb: 0.7, role: small,  priority: 20, notes: "G19 latency option for the voice path only: ~6% WER, no silence hallucination, EN + 25 EU languages. Runs via MLX/FluidAudio on Apple Neural Engine. Evaluate in Brief 12 pilot; do not replace `transcribe` default without a measured reason." }
+
+# ── deterministic pre-filter (not a model-manifest entry; recorded so it isn't lost) ──
+# NudeNet (Python lib): stage-1 NSFW gating for the Brief 4 media pipeline.
+# Multi-label nudity detection with confidence scores; runs in the batch queue
+# on Unraid or M4 Pro. LLM/VLM classification only runs on what NudeNet flags.
+
+# ── Notes / concerns register ──
+# 1. Total declared size ≈ 235GB across both roles — comfortably under typical
+#    free space but the reserve floor (G26, default 100GB) will bite on the
+#    M1 Pro if its SSD is small. Confirm per-host models-dir volume before ratifying priorities.
+# 2. RAM is not modeled. Proposed schema addition for a future revision:
+#    min_unified_memory_gb per entry, letting the planner refuse role-inappropriate
+#    placements instead of relying on role discipline alone. Flagged, not implemented (F-schema is FIXED for v1).
+# 3. Overlap audit suggested at ratification: qwen3.6:27b vs 35b vs glm-4.7-flash
+#    vs qwen3-coder are four ~20GB coding-capable models on one node. The planner
+#    will happily pull all four if they fit; whether you WANT four is a human call.
+# 4. translategemma sizes and all "estimate — verify" entries get corrected by
+#    the T10 post-pull verification step; expect a manifest amendment after first full run.
+# 5. MLX backend floor (Amendment 1 A4.5): Ollama's MLX (Apple Silicon) backend
+#    documents a 32GB unified-memory floor; the M1 Pro sits exactly at it. If MLX
+#    fails to activate there, the node silently falls back to the GGML path —
+#    verify the active backend on the M1 Pro after upgrade (ollama logs report it)
+#    and record it in runbooks/ollama.md. Trust the observed backend over any
+#    article claiming the preview is M5-only.
+# 6. MLX TTFT caveat (Amendment 1 A4.6): MLX does a full prefill before the first
+#    token, so TTFT grows linearly with input length. This is the measurement
+#    trigger for routing long-context medium jobs to llamacpp (F6.1.2, pending T14).
