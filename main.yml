@@ -37,6 +37,7 @@
 
         - name: Install Rosetta 2
           command: softwareupdate --install-rosetta --agree-to-license
+          become: true  # softwareupdate --install-rosetta requires root; play runs become:false
           when: not rosetta_check.stat.exists
 
       when: ansible_architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
