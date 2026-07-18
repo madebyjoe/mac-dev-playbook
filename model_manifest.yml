@@ -1,0 +1,60 @@
+---
+# ============================================================================
+# SYNTHETIC model manifest — replace via G25 (see BRIEF.md).
+#
+# These entries are EXAMPLES ONLY. They exist to exercise the planner's code
+# paths (fit / no-fit / priority ordering / present / non-ollama skip) and to
+# document the schema. They are NOT a curated preferred-model list. The human
+# supplies the real manifest (G25); until then everything downstream runs
+# against this synthetic data (Standing Rule 2).
+# ============================================================================
+#
+# Schema — one mapping per entry under `models:`:
+#   name     : model tag exactly as the engine expects it (e.g. `ollama pull`).
+#   engine   : inference engine. v1 implements `ollama` ONLY (F6); entries with
+#              any other engine are parsed and SKIPPED with a notice, not an
+#              error, so the manifest can carry future llama.cpp / MLX / LM
+#              Studio models today.
+#   size_gb  : DECLARED on-disk size in GB. Deterministic-first — the planner
+#              trusts this for fit decisions rather than querying at runtime.
+#              Post-pull verification reconciles declared vs actual and warns on
+#              >20% divergence, feeding corrections back to the human.
+#   role     : which inference-role node may pull it — small | medium | either.
+#   priority : integer; LOWER pulls first (1 before 2). Ties broken by name.
+#   notes    : free text for the human.
+
+models:
+  - name: synthetic-small-a:7b
+    engine: ollama
+    size_gb: 5
+    role: small
+    priority: 1
+    notes: "SYNTHETIC — small-role, highest priority."
+
+  - name: synthetic-either-b:8b
+    engine: ollama
+    size_gb: 8
+    role: either
+    priority: 2
+    notes: "SYNTHETIC — qualifies for both small and medium nodes."
+
+  - name: synthetic-medium-c:32b
+    engine: ollama
+    size_gb: 20
+    role: medium
+    priority: 1
+    notes: "SYNTHETIC — medium-role, highest priority."
+
+  - name: synthetic-medium-d:70b
+    engine: ollama
+    size_gb: 40
+    role: medium
+    priority: 3
+    notes: "SYNTHETIC — large; exercises the deferred (insufficient space) path."
+
+  - name: synthetic-mlx-e:7b
+    engine: mlx
+    size_gb: 4
+    role: either
+    priority: 1
+    notes: "SYNTHETIC — non-ollama engine; planner SKIPS it in v1 (F6)."

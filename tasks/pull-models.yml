@@ -1,0 +1,78 @@
+---
+# Storage-aware model pulls (F5/F6). Runs the deterministic planner to produce a
+# JSON plan, shows it, then pulls ONLY the models the planner selected (async,
+# per the existing 30-min pattern). The planner never deletes; eviction is a
+# human decision surfaced as a recommendation. Pulls happen only when the human
+# sets `model_pull_dry_run=false` — the default is a dry plan with no pulls.
+
+- name: Resolve this host's inference role
+  set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
+
+- name: Plan and pull inference models
+  when: inference_role != ''
+  block:
+    - name: Run the model-pull planner (non-destructive; JSON to stdout)
+      command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
+          - "--manifest"
+          - "{{ playbook_dir }}/model_manifest.yml"
+          - "--role"
+          - "{{ inference_role }}"
+          - "--models-dir"
+          - "{{ ollama_models_dir | default(ansible_env.HOME + '/.ollama/models') }}"
+          - "--reserve-floor-gb"
+          - "{{ reserve_floor_gb | default(100) }}"
+          - "--format"
+          - "json"
+          - "--dry-run"
+      register: model_plan_raw
+      changed_when: false
+      check_mode: false  # read-only planner; safe and needed under --check
+
+    - name: Parse the JSON plan
+      set_fact:
+        model_plan: "{{ model_plan_raw.stdout | from_json }}"
+
+    - name: Show the plan (human-readable)
+      debug:
+        msg: "{{ model_plan_raw.stderr_lines }}"
+
+    # Pulls are gated behind model_pull_dry_run (default true). The executor
+    # never runs this live; it is the human's call at review time.
+    - name: Pull selected models (async, 30 min each)
+      command: "ollama pull {{ item.name }}"
+      loop: "{{ model_plan.pull }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not (model_pull_dry_run | default(true) | bool)
+      register: ollama_pull
+      changed_when: "'pulling manifest' in (ollama_pull.stdout | default(''))"
+      async: 1800
+      poll: 30
+
+    # Reconcile declared size_gb against actual on-disk size and warn on >20%
+    # divergence, feeding manifest corrections back to the human (F5).
+    - name: Verify pulled model sizes against the manifest
+      command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
+          - "--manifest"
+          - "{{ playbook_dir }}/model_manifest.yml"
+          - "--role"
+          - "{{ inference_role }}"
+          - "--verify"
+      register: model_verify_raw
+      changed_when: false
+      check_mode: false
+      when: not (model_pull_dry_run | default(true) | bool)
+
+    - name: Report size divergences (if any)
+      debug:
+        msg: "{{ model_verify_raw.stderr_lines | default([]) }}"
+      when:
+        - not (model_pull_dry_run | default(true) | bool)
+        - (model_verify_raw.stderr_lines | default([])) | length > 0
