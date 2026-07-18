@@ -3,6 +3,9 @@
 # Default ruleset (all rules). The playbook is expected to lint clean.
 
 exclude_paths:
-  - artifacts/        # generated LiteLLM snippets (gitignored)
-  - .github/          # workflow YAML, not Ansible content
-  - tests/            # Python unit tests
+  - artifacts/            # generated LiteLLM snippets (gitignored)
+  - .github/              # workflow YAML, not Ansible content
+  - tests/                # Python unit tests
+  - model_manifest.yml    # human-owned data manifest (flow-style, column-aligned);
+                          # validated by the planner parser + unit tests, not by
+                          # ansible-lint's YAML style rules
