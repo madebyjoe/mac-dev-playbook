@@ -92,6 +92,21 @@ Pure additions with no machine state. `git revert <T12>` removes `.ansible-lint`
 and the CI workflow (and would reintroduce the lint findings the commit fixed);
 `git revert <T13>` removes the runbooks and their README links.
 
+## MDP-2 — endpoint closure & local addressing
+
+- **T15 (.env addressing):** additive. `git revert <T15>` removes the loader,
+  `.env.example`, and the F15 assert; binds revert from `lan_ip` to the tailnet
+  default. Your `.env` is gitignored and untouched. No machine state.
+- **T16 (bare aliases):** `git revert <T16>` drops the bare-alias blocks and the
+  `--lint` gate; snippets regress to role-namespaced-only. Artifacts are not live
+  config, so the router keeps whatever you last applied.
+- **T17 (transcribe service):** the one external state is the launchd service.
+  To remove it: `launchctl bootout "gui/$(id -u)/com.inference.transcribe"` and
+  delete `~/Library/LaunchAgents/com.inference.transcribe.plist`, then
+  `git revert <T17>`. The downloaded GGML model in `~/.cache/whisper/models/` is
+  never deleted by any code path. `embed` needs no rollback — it is just the
+  ollama instance.
+
 ## Phase 3b — llama.cpp engine (T14, Amendment 1)
 
 Additive and non-destructive, like the rest of the model system. `git revert`

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.inference.transcribe</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ whisper_server_bin | default('/opt/homebrew/bin/whisper-server') }}</string>
+        <string>--model</string>
+        <string>{{ whisper_models_dir }}/{{ whisper_model_file }}</string>
+        <!-- Loopback by default (F2); an inference role sets lan_ip (G30 = LAN).
+             whisper-server has NO auth (N4); a non-loopback bind must be the LAN
+             IP, never 0.0.0.0 — firewall-scoped to the Unraid source. -->
+        <string>--host</string>
+        <string>{{ lan_ip | default('127.0.0.1') }}</string>
+        <string>--port</string>
+        <string>{{ transcribe_port }}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{ whisper_log_dir }}/transcribe.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ whisper_log_dir }}/transcribe.err</string>
+</dict>
+</plist>

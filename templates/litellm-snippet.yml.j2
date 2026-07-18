@@ -10,13 +10,14 @@
 # are also emitted.
 model_list:
 {% for m in litellm_models %}
-{% set _prefix = 'openai' if m.engine == 'llamacpp' else 'ollama' %}
-{% set _port = m.port if m.engine == 'llamacpp' else 11434 %}
+{# ollama shares one instance on :11434; llamacpp/whisper are OpenAI-compatible on their own port. #}
+{% set _prefix = 'ollama' if m.engine == 'ollama' else 'openai' %}
+{% set _port = 11434 if m.engine == 'ollama' else m.port %}
   - model_name: "{{ inference_role }}/{{ m.name }}"
     litellm_params:
       model: "{{ _prefix }}/{{ m.name }}"
       api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
-{% if m.engine == 'llamacpp' %}
+{% if m.engine != 'ollama' %}
       api_key: "dummy"
 {% endif %}
 {% if m.serves_alias is defined and m.serves_alias %}
@@ -24,7 +25,7 @@ model_list:
     litellm_params:
       model: "{{ _prefix }}/{{ m.name }}"
       api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
-{% if m.engine == 'llamacpp' %}
+{% if m.engine != 'ollama' %}
       api_key: "dummy"
 {% endif %}
 {% endif %}

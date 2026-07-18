@@ -24,6 +24,9 @@ ratified/open so it lives with the code.
 | **G27** — repo origin (Gitea vs GitHub) | **Open** | Human decision; TODO candidate in README. Executor does nothing here. |
 | **G28** — core container-runtime pruning | **Open** | `docker` + `colima` + `orbstack` all in core; flagged, not changed beyond F3's moves. |
 | **G29** — gaming PC as inference node | **DEFER (default)** | See below. Out of scope for mac-dev-playbook. |
+| **G31** — service definitions for :8082 / :8084 | **RESOLVED (MDP-2 r3)** | Premise corrected: neither service was ever deployed. **G31a transcribe** = build whisper-server (`whisper-cpp`), bind `lan_ip:8082`, no auth (T17). **G31b embed** = consolidate onto ollama `:11434`; the standalone `:8084` server is retired/unbuilt — **port 8084 removed everywhere**. |
+
+> G30, G32, G33 (MDP-2) are recorded with T19. G30 = LAN (transport); G32 = smoke-test virtual key (router-side, human); G33 = raw `lan_ip` api_base.
 
 ## G29 — gaming PC as inference node (deferred)
 

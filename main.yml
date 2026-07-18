@@ -18,6 +18,10 @@
     model_manifest_path: "{{ playbook_dir }}/model_manifest.yml"
     llamacpp_models_dir: "{{ ansible_env.HOME }}/.cache/llamacpp/models"
     llamacpp_log_dir: "{{ ansible_env.HOME }}/Library/Logs/llamacpp"
+    # transcribe (whisper-server) service — M1 Pro (T17). Model fetched from HF.
+    whisper_models_dir: "{{ ansible_env.HOME }}/.cache/whisper/models"
+    whisper_log_dir: "{{ ansible_env.HOME }}/Library/Logs/transcribe"
+    whisper_model_base_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
   pre_tasks:
     - name: Load local addressing (.env)
@@ -240,6 +244,13 @@
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['config', 'llamacpp']
 
+    - name: Configure transcribe (whisper-server) service
+      ansible.builtin.import_tasks: tasks/configure-transcribe.yml
+      when: >-
+        ('work' not in group_names) and
+        ('inference_small' in group_names)
+      tags: ['config', 'transcribe']
+
     - name: Emit LiteLLM router snippet
       ansible.builtin.import_tasks: tasks/litellm-artifact.yml
       when: >-
@@ -256,4 +267,18 @@
         uid=$(id -u)
         launchctl bootout "gui/${uid}/com.ollama.serve" 2>/dev/null || true
         launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+      changed_when: true
+
+    # Restart transcribe only when its plist changed AND the model file is
+    # present (a dry/check run renders the plist but must not start a modelless
+    # server that would crash-loop under KeepAlive).
+    - name: Restart transcribe
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="com.inference.transcribe"
+        model="{{ whisper_models_dir }}/{{ whisper_model_file | default('') }}"
+        if [ -n "{{ whisper_model_file | default('') }}" ] && [ -f "$model" ]; then
+          launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+        fi
       changed_when: true

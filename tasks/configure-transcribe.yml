@@ -1,0 +1,84 @@
+---
+# Managed whisper-server "transcribe" service on the M1 Pro (T17, G31a/F13 r3).
+# BUILT from the Brief 1 design (the service was never deployed), not adopted.
+# Same launchd hygiene as the ollama service. Gated on inference_small
+# membership; the work guard is applied at the import in main.yml. The GGML model
+# is fetched honoring model_pull_dry_run; the service is only (re)started once the
+# model file is present, so a dry/check run just renders the plist.
+
+- name: Resolve this host's inference role
+  ansible.builtin.set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
+
+- name: Load the model manifest (for the transcribe entry)
+  ansible.builtin.include_vars:
+    file: "{{ model_manifest_path }}"
+    name: manifest
+  when: inference_role == 'small'
+
+- name: Select the transcribe manifest entry
+  ansible.builtin.set_fact:
+    transcribe_entry: >-
+      {{ (manifest.models | default([])
+          | selectattr('serves_alias', 'defined')
+          | selectattr('serves_alias', 'equalto', 'transcribe')
+          | list | first) | default({}) }}
+  when: inference_role == 'small'
+
+- name: Configure the transcribe (whisper-server) service
+  when:
+    - inference_role == 'small'
+    - (transcribe_entry | default({})) | length > 0
+  vars:
+    _model_file: "ggml-{{ transcribe_entry.name | regex_replace('^whisper-', '') }}.bin"
+  block:
+    - name: Derive transcribe service parameters
+      ansible.builtin.set_fact:
+        transcribe_port: "{{ transcribe_entry.port }}"
+        whisper_model_file: "{{ _model_file }}"
+
+    - name: Ensure whisper.cpp is installed (provides whisper-server)
+      community.general.homebrew:
+        name: whisper-cpp
+        state: present
+        update_homebrew: false
+
+    - name: Ensure transcribe directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        - "{{ whisper_models_dir }}"
+        - "{{ whisper_log_dir }}"
+
+    # Fetch the GGML model. Honors model_pull_dry_run (no separate flag, T17 r3);
+    # the executor never runs this live. Convention documented in the runbook.
+    - name: Download the whisper GGML model
+      ansible.builtin.get_url:
+        url: "{{ whisper_model_base_url }}/{{ whisper_model_file }}"
+        dest: "{{ whisper_models_dir }}/{{ whisper_model_file }}"
+        mode: '0644'
+      when: not (model_pull_dry_run | default(true) | bool)
+
+    - name: Template the transcribe launchd plist
+      ansible.builtin.template:
+        src: templates/transcribe.plist.j2
+        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.inference.transcribe.plist"
+        mode: '0644'
+      notify: Restart transcribe
+
+    # Load the service only once the model exists (keys off file presence, not a
+    # flag): a dry/check run renders the plist but never starts a modelless server.
+    - name: Ensure the transcribe service is bootstrapped (model present)
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="com.inference.transcribe"
+        model="{{ whisper_models_dir }}/{{ whisper_model_file }}"
+        if [ -f "$model" ] && ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
+          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+          echo bootstrapped
+        fi
+      register: transcribe_bootstrap
+      changed_when: "'bootstrapped' in transcribe_bootstrap.stdout"

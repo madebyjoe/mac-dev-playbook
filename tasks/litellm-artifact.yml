@@ -26,11 +26,11 @@
         file: "{{ model_manifest_path }}"
         name: manifest
 
-    - name: Select the served models (ollama + llamacpp) for this node's role
+    - name: Select the served models (ollama + llamacpp + whisper) for this role
       ansible.builtin.set_fact:
         litellm_models: >-
           {{ manifest.models
-             | selectattr('engine', 'in', ['ollama', 'llamacpp'])
+             | selectattr('engine', 'in', ['ollama', 'llamacpp', 'whisper'])
              | selectattr('role', 'in', [inference_role, 'either']) | list }}
 
     - name: Ensure the artifacts directory exists

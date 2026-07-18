@@ -28,6 +28,12 @@
 # 22–28GB weights as the practical ceiling on the M4 Pro (48GB) once KV cache
 # and the OS are accounted for. Concern flagged in Notes at bottom.
 
+# Port registry (T14/T17) — one port per non-ollama serving instance, to prevent
+# collisions. ollama is fixed at 11434; ports below are also carried on their
+# entry's `port` field. The planner --lint / port-collision checks read this.
+ports:
+  transcribe: 8082   # whisper-server on the M1 Pro (T17)
+
 models:
 
   # ── small role — M1 Pro (32GB) ────────────────────────────────────────────
@@ -46,7 +52,7 @@ models:
   - { name: "embeddinggemma:latest",   engine: ollama, size_gb: 0.6,  role: small,  priority: 100, notes: "Estimate — verify." }
   - { name: "qwen3-embedding:0.6b",    engine: ollama, size_gb: 0.7,  role: small,  priority: 110, notes: "Estimate — verify." }
   - { name: "qwen3-embedding:4b",      engine: ollama, size_gb: 2.6,  role: small,  priority: 120, notes: "Estimate — verify." }
-  - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, notes: "Estimate — verify." }
+  - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, serves_alias: embed, notes: "Serves the `embed` alias via ollama :11434 (F13 r3; no standalone :8084). Non-floating tag. HUMAN: pin the exact ollama digest and record the embedding DIMENSION here before Brief 3's first index run — digest=TODO dimension=TODO. Changing the backing embed model after first index is out of scope." }
 
   # ── medium role — M4 Pro (48GB) ───────────────────────────────────────────
   - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, serves_alias: medium, notes: "Verified 20GB. Dense 27B; primary `medium` alias (serves_alias, confirm at review)." }
@@ -69,7 +75,7 @@ models:
   - { name: "prithivMLmods/Qwen3-VL-8B-Abliterated-Caption-it", engine: ollama, size_gb: 9.0, role: medium, priority: 130, notes: "G25 pick (Amendment 1 A1): engine=ollama per human decision. Upstream is an HF distribution — confirm an Ollama pull route resolves this tag on first pull, else revisit the llamacpp/mlx_hf route. Size estimate — verify. Uncensored VISION captioner for flagged media. Fallback if flaky: JoyCaption-class fine-tune." }
 
   # ── transcription — non-ollama engines, listed for completeness (skipped by v1 planner) ──
-  - { name: "whisper-large-v3-turbo",  engine: whisper, size_gb: 1.6, role: small,  priority: 10, notes: "Backs the existing `transcribe` alias (Brief 9 FIXED). M1 Pro, launchd, port 8082." }
+  - { name: "whisper-large-v3-turbo",  engine: whisper, size_gb: 1.6, role: small,  priority: 10, port: 8082, serves_alias: transcribe, notes: "Backs the `transcribe` alias (Brief 9 FIXED). Built as whisper-server (whisper-cpp) on the M1 Pro, launchd, bind lan_ip:8082 (T17, F13 r3). Planner skips engine:whisper for pulls; the GGML model is fetched by the transcribe task honoring model_pull_dry_run." }
   - { name: "parakeet-tdt-0.6b-v3",    engine: mlx_hf,  size_gb: 0.7, role: small,  priority: 20, notes: "G19 latency option for the voice path only: ~6% WER, no silence hallucination, EN + 25 EU languages. Runs via MLX/FluidAudio on Apple Neural Engine. Evaluate in Brief 12 pilot; do not replace `transcribe` default without a measured reason." }
 
 # ── deterministic pre-filter (not a model-manifest entry; recorded so it isn't lost) ──
