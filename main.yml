@@ -52,49 +52,78 @@
       when: not homebrew_check.stat.exists
 
   tasks:
-    - name: Ensure Homebrew Taps are tapped
-      community.general.homebrew_tap:
-        name: "{{ item }}"
-        state: present
-      loop: "{{ homebrew_taps }}"
-      register: tap_result
-      failed_when: false  # Don't stop on errors
-      tags: ['homebrew']
-      
-    - name: Show tap errors
-      debug:
-        msg: "Failed to tap {{ item.item }}: {{ item.msg | default('Unknown error') }}"
-      loop: "{{ tap_result.results }}"
-      when: item.failed | default(false)
+    # F9: each install runs in BULK first (one fast brew invocation). If the
+    # bulk task fails, the rescue re-runs the same list PER ITEM to pinpoint and
+    # record exactly which entries failed. The play then asserts every failure
+    # list is empty, so a broken tap/package/cask/MAS app fails the run by
+    # default. `-e soft_fail=true` downgrades the assert to a summary (the old
+    # interactive behaviour).
+
+    - name: Ensure Homebrew taps are present
+      block:
+        - name: Add Homebrew taps (bulk)
+          community.general.homebrew_tap:
+            name: "{{ homebrew_taps }}"
+            state: present
+          when: homebrew_taps | length > 0
+      rescue:
+        - name: Retry taps individually to identify failures
+          community.general.homebrew_tap:
+            name: "{{ item }}"
+            state: present
+          loop: "{{ homebrew_taps }}"
+          register: tap_items
+          failed_when: false
+        - name: Record failed taps
+          set_fact:
+            failed_taps: "{{ (tap_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
       tags: ['homebrew']
 
     - name: Ensure CLI packages are installed
-      community.general.homebrew:
-        name: "{{ item }}"
-        state: present
-        update_homebrew: false
-      loop: "{{ homebrew_packages }}"
-      register: package_result
-      failed_when: false
-      tags: ['homebrew']
-
-    - name: Show package errors
-      debug:
-        msg: "Failed to install {{ item.item }}: {{ item.msg | default('Unknown error') }}"
-      loop: "{{ package_result.results }}"
-      when: item.failed | default(false)
+      block:
+        - name: Install CLI packages (bulk)
+          community.general.homebrew:
+            name: "{{ homebrew_packages }}"
+            state: present
+            update_homebrew: false
+          when: homebrew_packages | length > 0
+      rescue:
+        - name: Retry packages individually to identify failures
+          community.general.homebrew:
+            name: "{{ item }}"
+            state: present
+            update_homebrew: false
+          loop: "{{ homebrew_packages }}"
+          register: package_items
+          failed_when: false
+        - name: Record failed packages
+          set_fact:
+            failed_packages: "{{ (package_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
       tags: ['homebrew']
 
     - name: Ensure Cask applications are installed
-      community.general.homebrew_cask:
-        name: "{{ item }}"
-        state: present
-        accept_external_apps: true
-      loop: "{{ homebrew_cask_apps }}"
-      register: cask_result
-      failed_when: false
+      block:
+        - name: Install casks (bulk)
+          community.general.homebrew_cask:
+            name: "{{ homebrew_cask_apps }}"
+            state: present
+            accept_external_apps: true
+          when: homebrew_cask_apps | length > 0
+      rescue:
+        - name: Retry casks individually to identify failures
+          community.general.homebrew_cask:
+            name: "{{ item }}"
+            state: present
+            accept_external_apps: true
+          loop: "{{ homebrew_cask_apps }}"
+          register: cask_items
+          failed_when: false
+        - name: Record failed casks
+          set_fact:
+            failed_casks: "{{ (cask_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
       tags: ['homebrew']
 
+    # --- Mac App Store ---
     - name: Check if mas is installed (required for App Store apps)
       stat:
         path: /opt/homebrew/bin/mas
@@ -102,29 +131,22 @@
       when: mas_apps | length > 0
       tags: ['mas']
 
-    - name: Install mas if not present (should have been installed earlier)
-      community.general.homebrew:
-        name: mas
-        state: present
-      when: 
-        - mas_apps | length > 0
-        - not mas_binary.stat.exists
-      tags: ['mas']
-
     - name: Check if signed into App Store
       command: /opt/homebrew/bin/mas account
       register: mas_account
       failed_when: false
       changed_when: false
-      when: mas_apps | length > 0
+      when:
+        - mas_apps | length > 0
+        - mas_binary.stat.exists | default(false)
       tags: ['mas']
 
     - name: Warning if not signed into App Store
       debug:
-        msg: "WARNING: Not signed into App Store. MAS apps will fail. Sign in via App Store GUI first."
+        msg: "WARNING: Not signed into App Store; MAS apps will be skipped. Sign in via the App Store GUI first."
       when:
         - mas_apps | length > 0
-        - mas_account.rc != 0
+        - (mas_account.rc | default(1)) != 0
       tags: ['mas']
 
     - name: Install Mac App Store apps
@@ -132,21 +154,46 @@
         id: "{{ item.id }}"
         state: present
       loop: "{{ mas_apps }}"
-      when: 
+      when:
         - mas_apps | length > 0
-        - mas_account.rc == 0
-      register: mas_result
+        - (mas_account.rc | default(1)) == 0
+      register: mas_items
       failed_when: false
       tags: ['mas']
 
-    - name: Summary of failures
+    - name: Record failed MAS apps
+      set_fact:
+        failed_mas: "{{ (mas_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | map(attribute='name') | list }}"
+      when: mas_apps | length > 0
+      tags: ['mas']
+
+    # --- Strict failure gate (F9) ---
+    - name: Assert all installs succeeded (strict; -e soft_fail=true to bypass)
+      assert:
+        that:
+          - (failed_taps | default([])) | length == 0
+          - (failed_packages | default([])) | length == 0
+          - (failed_casks | default([])) | length == 0
+          - (failed_mas | default([])) | length == 0
+        success_msg: "All taps, packages, casks, and MAS apps installed."
+        fail_msg: >-
+          Provisioning failed. failed_taps={{ failed_taps | default([]) }}
+          failed_packages={{ failed_packages | default([]) }}
+          failed_casks={{ failed_casks | default([]) }}
+          failed_mas={{ failed_mas | default([]) }}
+      when: not (soft_fail | default(false) | bool)
+      tags: ['homebrew', 'mas']
+
+    - name: Summary of failures (soft_fail mode)
       debug:
         msg:
-          - "=== Installation Summary ==="
-          - "Failed taps: {{ tap_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-          - "Failed packages: {{ package_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-          - "Failed casks: {{ cask_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-    
+          - "=== Installation Summary (soft_fail) ==="
+          - "Failed taps: {{ failed_taps | default([]) }}"
+          - "Failed packages: {{ failed_packages | default([]) }}"
+          - "Failed casks: {{ failed_casks | default([]) }}"
+          - "Failed MAS apps: {{ failed_mas | default([]) }}"
+      when: soft_fail | default(false) | bool
+
     # Configuration tasks
     - name: Configure Ollama
       import_tasks: tasks/configure-ollama.yml
