@@ -1,0 +1,54 @@
+---
+# Load per-host addresses from a gitignored .env at the repo root (F10, MDP-2).
+# Addresses never live in tracked files (interim mitigation while G27 — Gitea
+# origin — is open). set_fact here OUTRANKS group_vars, which only carry
+# defaults; that is intended. Included from pre_tasks (tag: always) so addresses
+# are available whatever --tags the run uses.
+
+- name: Check for a local .env
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/.env"
+  register: local_env_file
+  check_mode: false
+
+- name: Parse .env into a dict (shared stdlib parser)
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/scripts/local_env.py"
+      - "--json"
+      - "{{ playbook_dir }}/.env"
+  register: local_env_raw
+  changed_when: false
+  check_mode: false
+  when: local_env_file.stat.exists
+
+- name: Resolve this host's addresses from .env
+  ansible.builtin.set_fact:
+    lan_ip: "{{ _env[_hostkey ~ '_LAN_IP'] | default(omit) }}"
+    tailnet_ip: "{{ _env[_hostkey ~ '_TAILNET_IP'] | default(omit) }}"
+    tailnet_name: "{{ _env[_hostkey ~ '_TAILNET_NAME'] | default(omit) }}"
+  vars:
+    _env: "{{ (local_env_raw.stdout | default('{}')) | from_json }}"
+    _hostkey: "{{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}"
+  when: local_env_file.stat.exists
+
+# F15: an inference-role host MUST resolve a LAN bind address (G30 = LAN) or the
+# run fails loudly, naming the missing key — never a silent loopback bind that
+# would emit an unreachable api_base. Non-role hosts keep the F2 loopback default.
+- name: Assert an inference-role host has a LAN bind address (F15)
+  ansible.builtin.assert:
+    that:
+      - lan_ip is defined
+      - (lan_ip | default('')) | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }} is in an inference-role group but .env has no
+      {{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}_LAN_IP
+      (G30 = LAN transport). Add it to .env (see .env.example), or pass
+      -e allow_loopback=true for laptop dev without a filled .env.
+    success_msg: "LAN bind address resolved for {{ inventory_hostname }}."
+  when:
+    - >-
+      ('inference_small' in group_names) or
+      ('inference_medium' in group_names)
+    - not (allow_loopback | default(false) | bool)

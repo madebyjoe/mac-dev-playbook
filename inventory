@@ -28,19 +28,19 @@ mac-headless ansible_connection=local
 # (bind, keep-alive, model manifest selection) keys off membership here, never
 # off "ollama happens to be installed". Both are empty by default.
 #
-# A host that joins a role must set its tailnet identity so the bind and the
-# LiteLLM snippet resolve:
-#   tailnet_ip   -> OLLAMA_HOST bind (e.g. 100.x.y.z)
-#   tailnet_name -> LiteLLM api_base host (e.g. mac-headless.tailXXXX.ts.net)
+# Membership is PUBLIC and lives here; ADDRESSES do NOT (F10). A host that joins
+# a role gets its addresses from the gitignored `.env` at the repo root, keyed
+# by hostname (MAC_HEADLESS_LAN_IP, ...). See `.env.example`. Under G30 = LAN the
+# bind and the LiteLLM api_base use *_LAN_IP; Tailscale is management-only.
 #
-# Example: make the headless box a small inference node.
+# Example: make the headless box a small inference node (membership only):
 #   [inference_small]
-#   mac-headless tailnet_ip=100.64.0.10 tailnet_name=mac-headless.tailnet.ts.net
+#   mac-headless
 [inference_small]
 
-# Example: make a beefier box (M4 Pro) a medium inference node.
+# Example: make a beefier box (M4 Pro) a medium inference node (membership only):
 #   [inference_medium]
-#   mac-headless tailnet_ip=100.64.0.11 tailnet_name=mac-studio.tailnet.ts.net
+#   mac-headless
 [inference_medium]
 
 # All profiles get core packages.

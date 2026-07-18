@@ -20,6 +20,10 @@
     llamacpp_log_dir: "{{ ansible_env.HOME }}/Library/Logs/llamacpp"
 
   pre_tasks:
+    - name: Load local addressing (.env)
+      ansible.builtin.import_tasks: tasks/load-local-env.yml
+      tags: ['always']
+
     - name: Display installation plan
       ansible.builtin.debug:
         msg:

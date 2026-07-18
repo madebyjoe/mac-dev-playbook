@@ -5,3 +5,5 @@ artifacts/
 # Python bytecode from the planner and its tests.
 __pycache__/
 *.pyc
+# Local addressing — addresses only, never committed (F10, MDP-2). Keep .env.example.
+.env

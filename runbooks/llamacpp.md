@@ -7,7 +7,7 @@ model), each `engine: llamacpp` manifest entry runs as its **own** launchd
 `llama-server` instance: label `com.llamacpp.<safe-name>` (colons/slashes in the
 model name become `_`), plist at `~/Library/LaunchAgents/com.llamacpp.<safe-name>.plist`,
 rendered by `tasks/configure-llamacpp.yml` from `templates/llamacpp-server.plist.j2`.
-Each binds **loopback by default** (F2; an inference role sets `tailnet_ip`), serves
+Each binds **loopback by default** (F2; an inference role sets `lan_ip`, G30 = LAN), serves
 its manifest **`port`**, and offloads all layers to the Apple Silicon GPU
 (`--n-gpu-layers -1`). The GGUF quant is downloaded by the storage-aware planner's
 pull step (`huggingface-cli download <hf_repo> <quant_file>`) into

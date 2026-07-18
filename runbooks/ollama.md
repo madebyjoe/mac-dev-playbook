@@ -8,8 +8,9 @@ non-`work` hosts that have `ollama` installed; **work-profile machines never run
 it** (F3). Where it binds is decided by inference-role membership, not by the
 profile: with no role group it binds **loopback `127.0.0.1:11434`** (Ollama has no
 auth, so a non-loopback bind would expose an unauthenticated API); a host in
-`inference_small`/`inference_medium` binds its **Tailscale IP** (`ollama_bind`,
-from `tailnet_ip`) and pins the model resident with `OLLAMA_KEEP_ALIVE=-1` (G19).
+`inference_small`/`inference_medium` binds its **LAN IP** (`ollama_bind`, from
+`lan_ip` in `.env`; G30 = LAN) and pins the model resident with
+`OLLAMA_KEEP_ALIVE=-1` (G19). Tailscale on the Macs is management-only.
 Logs are in `~/Library/Logs/ollama/{ollama.log,ollama.err}`. The plist is bounced
 **only when its rendered content changes** (via the `Restart Ollama` handler), so
 normal runs never drop a resident model.

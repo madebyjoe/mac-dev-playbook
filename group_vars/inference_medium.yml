@@ -3,10 +3,13 @@
 # Membership in this group (not "ollama is installed") is what turns a machine
 # into a medium inference backend. A host is in AT MOST ONE inference-role group.
 
-# Bind Ollama on the host's Tailscale interface so LiteLLM on Unraid reaches it
-# over the tailnet. Set `tailnet_ip` per host in the inventory. If it is unset,
-# the bind stays on loopback (fail-safe: never silently expose 0.0.0.0).
-ollama_bind: "{{ tailnet_ip | default('127.0.0.1') }}:11434"
+# Bind Ollama on the host's LAN IP (G30 = LAN transport). LiteLLM on Unraid
+# reaches backends over the wired LAN; the backend port is unauthenticated, so
+# the LAN is the only interface it should listen on (the router at :4000 is the
+# enforcement door). `lan_ip` comes from .env (MAC_<HOST>_LAN_IP), loaded in
+# pre_tasks; if it is unset on a role host the run fails loudly (F15) unless
+# -e allow_loopback=true. Tailscale on the Macs stays for SSH/management only.
+ollama_bind: "{{ lan_ip | default('127.0.0.1') }}:11434"
 
 # Keep the resident model loaded indefinitely (G19 latency requirement).
 ollama_keep_alive: -1

@@ -9,10 +9,11 @@
         <string>{{ llamacpp_server_bin | default('/opt/homebrew/bin/llama-server') }}</string>
         <string>--model</string>
         <string>{{ llamacpp_model_path }}</string>
-        <!-- Loopback by default (F2); an inference role sets tailnet_ip. llama-server
-             has no auth, so a non-loopback bind must be a tailnet IP, never 0.0.0.0. -->
+        <!-- Loopback by default (F2); an inference role sets lan_ip (G30 = LAN).
+             llama-server has no auth, so a non-loopback bind must be the LAN IP,
+             never 0.0.0.0. -->
         <string>--host</string>
-        <string>{{ tailnet_ip | default('127.0.0.1') }}</string>
+        <string>{{ lan_ip | default('127.0.0.1') }}</string>
         <string>--port</string>
         <string>{{ llamacpp_port }}</string>
         <!-- Offload all layers to the Apple Silicon GPU (Metal). -->

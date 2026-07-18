@@ -59,13 +59,27 @@ You can filter which part of the provisioning process to run by specifying a set
 
     ansible-playbook main.yml --limit personal --tags "homebrew"
 
+### Local addressing (`.env`)
+
+Host addresses are **not** stored in this repo (it is public; the durable fix is G27, Gitea origin). They live in a gitignored `.env` at the repo root. Copy the template, fill it in, and never commit it:
+
+```
+cp .env.example .env
+# edit .env: each host's LAN IP (and, for management only, its Tailscale IP/name)
+```
+
+Keys are per-host, hostname `UPPER_SNAKE_CASE`-prefixed — `MAC_HEADLESS_LAN_IP`, `MAC_HEADLESS_TAILNET_IP`, `MAC_HEADLESS_TAILNET_NAME`, etc. Under **G30 = LAN**, inference binds and the LiteLLM `api_base` use `*_LAN_IP` (set static DHCP reservations that match the router's `M1PRO_IP`/`M4PRO_IP`); Tailscale stays for SSH/management only. The playbook loads `.env` in `pre_tasks` and `set_fact`s `lan_ip`/`tailnet_ip`/`tailnet_name` per host — these **override** the group_vars defaults.
+
+`.env` holds addresses only — **no credentials** (F10). Back it up (1Password secure note or the private Gitea mirror); it is also on the sanitization deny-list. `.env.example` documents every key with placeholders.
+
 ### Ollama network binding
 
-The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default**. Ollama has no authentication of its own, so a non-loopback bind exposes an unauthenticated inference API on that interface. Override the bind only where you intend to serve inference, and prefer the host's Tailscale interface IP over `0.0.0.0`:
+The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default** — Ollama has no auth, so a non-loopback bind would expose an unauthenticated API. A host in an `inference_small`/`inference_medium` group instead binds its **LAN IP** (`ollama_bind`, from `lan_ip`), keeps the model resident, drives storage-aware model pulls, and emits a LiteLLM router snippet into `artifacts/litellm/`.
 
-- `ollama_bind` — the `OLLAMA_HOST` value written into the plist (e.g. `100.x.y.z:11434` for a tailnet IP). Set via inference-role group_vars, not per profile.
+- `ollama_bind` — the `OLLAMA_HOST` value written into the plist, `<lan_ip>:11434`, set by the inference-role group_vars from the host's `.env` `*_LAN_IP`.
+- A role-group host with **no** LAN IP in `.env` **fails the run** naming the missing key (F15); pass `-e allow_loopback=true` for laptop dev without a filled `.env`.
 
-Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). To make a host serve inference, add it to an `inference_small` or `inference_medium` group in the `inventory` (with `tailnet_ip`/`tailnet_name`); that turns on the tailnet bind, keeps the model resident, drives storage-aware model pulls, and emits a LiteLLM router snippet into `artifacts/litellm/`. See the runbooks below.
+Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). See the runbooks below.
 
 ## Runbooks
 
