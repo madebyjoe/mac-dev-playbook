@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Storage-aware Ollama model-pull planner (F5/F6).
+"""Storage-aware model-pull planner (F5/F6.1).
 
 Deterministic, stdlib-only, and NON-DESTRUCTIVE by construction: this tool only
 ever computes and prints a plan. It NEVER pulls and NEVER deletes. Pulls are
@@ -7,17 +7,19 @@ performed by tasks/pull-models.yml from the JSON plan; evictions are printed as
 recommendations for the human only.
 
 Selection: from the manifest, take entries whose role matches the node role
-(`either` always qualifies) and whose engine is implemented (`ollama` in v1).
-Models already present on disk cost zero and are kept. The remaining candidates
-are selected greedily in priority order (lower priority integer first, ties by
-name), pulling each whose declared size fits within `free - reserve_floor`.
-Non-ollama engines are reported as skipped; candidates that do not fit are
-reported as deferred with their shortfall.
+(`either` always qualifies) and whose engine is implemented (`ollama` or, per
+F6.1/T14, `llamacpp`). Both engines compete for the same disk budget. Models
+already present cost zero and are kept. The remaining candidates are selected
+greedily in priority order (lower priority integer first, ties by name), pulling
+each whose declared size fits within `free - reserve_floor`. Engines that are not
+implemented (whisper / mlx_hf / none) are reported as skipped; candidates that do
+not fit are reported as deferred with their shortfall.
 
-Free space comes from os.statvfs on the volume containing --models-dir, unless
---free-gb overrides it (used by tests so scenarios are deterministic). Present
-models come from `ollama list`, unless the OLLAMA_LIST_OUTPUT env var supplies
-canned output (used by tests so ollama need not be installed).
+Present ollama models come from `ollama list` (stubbable via OLLAMA_LIST_OUTPUT);
+present llamacpp models are the GGUF quant files that exist under the llamacpp
+models dir. Free space comes from os.statvfs on the volume containing
+--models-dir, unless --free-gb overrides it (used by tests so scenarios are
+deterministic).
 
 Sizes are treated in binary GB (GiB, 1024**3 bytes) throughout; the 20% verify
 tolerance makes the GB-vs-GiB labelling difference immaterial.
@@ -31,6 +33,7 @@ import sys
 
 BYTES_PER_GB = 1024 ** 3
 VERIFY_TOLERANCE = 0.20
+IMPLEMENTED_ENGINES = ("ollama", "llamacpp")  # F6.1: ollama primary, llamacpp T14
 
 
 # --------------------------------------------------------------------------- #
@@ -157,6 +160,31 @@ def load_manifest(path):
     return models
 
 
+def load_ports(path):
+    """Parse the optional top-level `ports:` registry into {name: port}.
+
+    The registry is a block mapping used to prevent llama-server port collisions
+    (T14). Returns {} if there is no ports section.
+    """
+    with open(path) as fh:
+        raw_lines = fh.readlines()
+    ports, in_ports = {}, False
+    for raw in raw_lines:
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped == "---":
+            continue
+        if not line[0].isspace():                 # a top-level key
+            key, _ = _split_kv(stripped)
+            in_ports = key == "ports"
+            continue
+        if in_ports and not stripped.startswith("-"):
+            k, v = _split_kv(stripped)
+            if k:
+                ports[k] = v
+    return ports
+
+
 # --------------------------------------------------------------------------- #
 # Environment probes
 # --------------------------------------------------------------------------- #
@@ -225,10 +253,43 @@ def ollama_list(ollama_bin="ollama"):
     return present
 
 
+def llamacpp_present(models, models_dir):
+    """Return {entry_name: size_gb} for llamacpp GGUF files that exist on disk.
+
+    Present-check is file existence + size (T14): the quant file lives at
+    <models_dir>/<quant_file>. No subprocess, so tests need nothing installed.
+    """
+    present = {}
+    for m in models:
+        if str(m.get("engine", "")).lower() != "llamacpp":
+            continue
+        quant = m.get("quant_file")
+        if not quant:
+            continue
+        path = os.path.join(models_dir, quant)
+        if os.path.exists(path):
+            present[m.get("name")] = os.path.getsize(path) / BYTES_PER_GB
+    return present
+
+
 # --------------------------------------------------------------------------- #
 # Planning
 # --------------------------------------------------------------------------- #
-def build_plan(models, role, free_gb, reserve_floor_gb, present):
+def _entry_for(m):
+    """Build a plan entry, carrying engine-specific fields for llamacpp."""
+    engine = str(m.get("engine", "")).lower()
+    entry = {
+        "name": m.get("name"), "engine": engine,
+        "size_gb": m.get("size_gb"), "priority": m.get("priority"),
+    }
+    if engine == "llamacpp":
+        entry["hf_repo"] = m.get("hf_repo")
+        entry["quant_file"] = m.get("quant_file")
+        entry["port"] = m.get("port")
+    return entry
+
+
+def build_plan(models, role, free_gb, reserve_floor_gb, present, ports=None):
     """Pure planning function — no I/O. Returns the plan dict."""
     budget = free_gb - reserve_floor_gb
 
@@ -238,24 +299,14 @@ def build_plan(models, role, free_gb, reserve_floor_gb, present):
         m_role = str(m.get("role", "")).lower()
         if m_role not in (role, "either"):
             continue
-        if engine != "ollama":
-            # F6.1: llamacpp is the ratified second engine (planned as T14), so
-            # surface it separately from genuinely-unimplemented engines
-            # (whisper / mlx_hf / none) rather than burying it as noise.
-            if engine == "llamacpp":
-                skipped.append({
-                    "name": m.get("name"),
-                    "engine": m.get("engine"),
-                    "status": "pending_t14",
-                    "reason": "pending T14 (llama.cpp engine support)",
-                })
-            else:
-                skipped.append({
-                    "name": m.get("name"),
-                    "engine": m.get("engine"),
-                    "status": "not_implemented",
-                    "reason": "engine not implemented (v1 is ollama-only)",
-                })
+        if engine not in IMPLEMENTED_ENGINES:
+            # whisper / mlx_hf / none — parsed and skipped with a notice (F6.1).
+            skipped.append({
+                "name": m.get("name"),
+                "engine": m.get("engine"),
+                "status": "not_implemented",
+                "reason": "engine not implemented (v1: ollama, llamacpp)",
+            })
             continue
         candidates.append(m)
 
@@ -266,10 +317,7 @@ def build_plan(models, role, free_gb, reserve_floor_gb, present):
     for m in candidates:
         name = m.get("name")
         size = float(m.get("size_gb", 0))
-        entry = {
-            "name": name, "engine": "ollama",
-            "size_gb": m.get("size_gb"), "priority": m.get("priority"),
-        }
+        entry = _entry_for(m)
         if name in present:
             present_kept.append(entry)  # already on disk: zero cost, kept
             continue
@@ -277,9 +325,8 @@ def build_plan(models, role, free_gb, reserve_floor_gb, present):
             pull.append(entry)
             remaining -= size
         else:
-            short = round(size - remaining, 3)
             d = dict(entry)
-            d["shortfall_gb"] = short
+            d["shortfall_gb"] = round(size - remaining, 3)
             deferred.append(d)
 
     evictions = _eviction_recommendations(deferred, present_kept, present, budget)
@@ -295,7 +342,29 @@ def build_plan(models, role, free_gb, reserve_floor_gb, present):
         "deferred": deferred,
         "skipped": skipped,
         "eviction_recommendations": evictions,
+        "warnings": _port_warnings(candidates, ports),
     }
+
+
+def _port_warnings(candidates, ports):
+    """Flag llama-server port problems: missing port, duplicate port, or a port
+    that disagrees with the manifest `ports:` registry. Advisory (T14)."""
+    warns, seen = [], {}
+    for m in candidates:
+        if str(m.get("engine", "")).lower() != "llamacpp":
+            continue
+        name, port = m.get("name"), m.get("port")
+        if port is None:
+            warns.append("llamacpp entry %s has no port" % name)
+            continue
+        if port in seen:
+            warns.append("port %s collision: %s and %s" % (port, seen[port], name))
+        else:
+            seen[port] = name
+        if ports and name in ports and ports[name] != port:
+            warns.append("port %s for %s disagrees with ports registry (%s)"
+                         % (port, name, ports[name]))
+    return warns
 
 
 def _eviction_recommendations(deferred, present_kept, present, budget):
@@ -333,7 +402,8 @@ def _eviction_recommendations(deferred, present_kept, present, budget):
 def build_verification(models, present):
     """Return divergences where |actual-declared|/declared > tolerance."""
     diverged = []
-    by_name = {m.get("name"): m for m in models if str(m.get("engine", "")).lower() == "ollama"}
+    by_name = {m.get("name"): m for m in models
+               if str(m.get("engine", "")).lower() in IMPLEMENTED_ENGINES}
     for name, actual in present.items():
         m = by_name.get(name)
         if m is None or actual is None:
@@ -363,23 +433,22 @@ def render_human(plan):
     L.append("")
     L.append("PULL (%d):" % len(plan["pull"]))
     for e in plan["pull"]:
-        L.append("  + %-38s %s GB  (priority %s)" % (e["name"], e["size_gb"], e["priority"]))
+        L.append("  + %-38s %s GB  [%s]  (priority %s)"
+                 % (e["name"], e["size_gb"], e["engine"], e["priority"]))
     L.append("PRESENT / kept (%d):" % len(plan["present"]))
     for e in plan["present"]:
-        L.append("  = %-38s (already on disk, zero cost)" % e["name"])
+        L.append("  = %-38s [%s]  (already on disk, zero cost)" % (e["name"], e["engine"]))
     L.append("DEFERRED / insufficient space (%d):" % len(plan["deferred"]))
     for e in plan["deferred"]:
         L.append("  ! %-38s %s GB  short by %s GB  (priority %s)"
                  % (e["name"], e["size_gb"], e["shortfall_gb"], e["priority"]))
-    not_impl = [e for e in plan["skipped"] if e.get("status") != "pending_t14"]
-    pending = [e for e in plan["skipped"] if e.get("status") == "pending_t14"]
-    L.append("SKIPPED / engine not implemented (%d):" % len(not_impl))
-    for e in not_impl:
+    L.append("SKIPPED / engine not implemented (%d):" % len(plan["skipped"]))
+    for e in plan["skipped"]:
         L.append("  ~ %-38s engine=%s" % (e["name"], e["engine"]))
-    if pending:
-        L.append("SKIPPED / pending T14 — llama.cpp (%d):" % len(pending))
-        for e in pending:
-            L.append("  … %-38s engine=%s" % (e["name"], e["engine"]))
+    if plan.get("warnings"):
+        L.append("WARNINGS:")
+        for w in plan["warnings"]:
+            L.append("  ! %s" % w)
     if plan["eviction_recommendations"]:
         L.append("EVICTION RECOMMENDATIONS (advisory only — nothing is deleted):")
         for r in plan["eviction_recommendations"]:
@@ -398,7 +467,11 @@ def main(argv=None):
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_manifest.yml")
     p.add_argument("--manifest", default=default_manifest)
     p.add_argument("--role", required=True, choices=["small", "medium"])
-    p.add_argument("--models-dir", default=os.path.expanduser("~/.ollama/models"))
+    p.add_argument("--models-dir", default=os.path.expanduser("~/.ollama/models"),
+                   help="ollama models dir; its volume's free space is the shared budget")
+    p.add_argument("--llamacpp-models-dir",
+                   default=os.path.expanduser("~/.cache/llamacpp/models"),
+                   help="dir holding llamacpp GGUF quant files (should share the models-dir volume)")
     p.add_argument("--reserve-floor-gb", type=float, default=100.0)
     p.add_argument("--free-gb", type=float, default=None,
                    help="override free space (GB) instead of probing the volume; for tests")
@@ -412,7 +485,9 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     models = load_manifest(args.manifest)
-    present = ollama_list(args.ollama_bin)
+    ports = load_ports(args.manifest)
+    present = dict(ollama_list(args.ollama_bin))
+    present.update(llamacpp_present(models, args.llamacpp_models_dir))
 
     if args.verify:
         result = build_verification(models, present)
@@ -424,7 +499,7 @@ def main(argv=None):
         return 0
 
     free = args.free_gb if args.free_gb is not None else free_gb_for(args.models_dir)
-    plan = build_plan(models, args.role, free, args.reserve_floor_gb, present)
+    plan = build_plan(models, args.role, free, args.reserve_floor_gb, present, ports=ports)
 
     human = render_human(plan)
     sys.stderr.write(human + "\n")

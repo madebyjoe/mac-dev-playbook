@@ -96,18 +96,99 @@ class TestPlanning(unittest.TestCase):
         self.assertIn("mlx:7b", names(plan["skipped"]))
         self.assertNotIn("mlx:7b", names(plan["pull"]))
 
-    def test_llamacpp_categorized_pending_t14(self):
-        # F6.1: llamacpp is skipped but flagged as planned work (T14); other
-        # non-ollama engines are flagged as not implemented.
-        models = [M("cpp:1", "llamacpp", 5, "small", 1),
-                  M("whisper:1", "whisper", 1, "small", 1),
+    def test_whisper_and_mlx_still_skipped(self):
+        # T14 implements llamacpp; whisper/mlx_hf remain not-implemented.
+        models = [M("whisper:1", "whisper", 1, "small", 1),
+                  M("mlxhf:1", "mlx_hf", 1, "small", 1),
                   M("ok:1", "ollama", 5, "small", 1)]
         plan = planner.build_plan(models, "small",
                                   free_gb=500, reserve_floor_gb=0, present={})
-        by_name = {e["name"]: e for e in plan["skipped"]}
-        self.assertEqual(by_name["cpp:1"]["status"], "pending_t14")
-        self.assertEqual(by_name["whisper:1"]["status"], "not_implemented")
-        self.assertNotIn("cpp:1", names(plan["pull"]))
+        skipped = names(plan["skipped"])
+        self.assertIn("whisper:1", skipped)
+        self.assertIn("mlxhf:1", skipped)
+        self.assertNotIn("ok:1", skipped)
+
+
+def LC(name, size, role, priority, port, hf_repo="org/repo", quant_file=None):
+    return {"name": name, "engine": "llamacpp", "size_gb": size, "role": role,
+            "priority": priority, "port": port, "hf_repo": hf_repo,
+            "quant_file": quant_file or (name.replace(":", "_") + ".gguf")}
+
+
+class TestLlamacpp(unittest.TestCase):
+
+    def test_llamacpp_is_a_real_pull_candidate(self):
+        # T14: llamacpp competes for budget alongside ollama and carries its
+        # engine-specific fields into the plan.
+        models = [LC("cpp:1", 5, "medium", 1, 8091),
+                  M("oll:1", "ollama", 5, "medium", 2),
+                  M("whisper:1", "whisper", 1, "medium", 1)]
+        plan = planner.build_plan(models, "medium",
+                                  free_gb=200, reserve_floor_gb=100, present={})
+        pulled = {e["name"]: e for e in plan["pull"]}
+        self.assertIn("cpp:1", pulled)
+        self.assertEqual(pulled["cpp:1"]["engine"], "llamacpp")
+        self.assertEqual(pulled["cpp:1"]["port"], 8091)
+        self.assertEqual(pulled["cpp:1"]["hf_repo"], "org/repo")
+        self.assertIn("quant_file", pulled["cpp:1"])
+        # both engines competed for the same budget
+        self.assertIn("oll:1", pulled)
+        self.assertNotIn("cpp:1", names(plan["skipped"]))
+
+    def test_llamacpp_present_by_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            quant = "model.Q4_K_M.gguf"
+            with open(os.path.join(d, quant), "wb") as fh:
+                fh.write(b"x" * 1024)  # tiny stand-in file
+            models = [LC("cpp:1", 5, "medium", 1, 8091, quant_file=quant)]
+            present = planner.llamacpp_present(models, d)
+            self.assertIn("cpp:1", present)
+            # and build_plan keeps a present model at zero cost
+            plan = planner.build_plan(models, "medium",
+                                      free_gb=101, reserve_floor_gb=100, present=present)
+            self.assertIn("cpp:1", names(plan["present"]))
+            self.assertEqual(plan["pull"], [])
+
+    def test_port_collision_warning(self):
+        models = [LC("a:1", 1, "medium", 1, 8091),
+                  LC("b:1", 1, "medium", 2, 8091)]  # same port
+        plan = planner.build_plan(models, "medium",
+                                  free_gb=200, reserve_floor_gb=0, present={})
+        self.assertTrue(any("collision" in w for w in plan["warnings"]))
+
+    def test_port_registry_mismatch_warning(self):
+        models = [LC("a:1", 1, "medium", 1, 8091)]
+        plan = planner.build_plan(models, "medium", free_gb=200,
+                                  reserve_floor_gb=0, present={},
+                                  ports={"a:1": 9999})
+        self.assertTrue(any("registry" in w for w in plan["warnings"]))
+
+    def test_load_ports_registry(self):
+        content = ("ports:\n"
+                   "  a:1: 8091\n"
+                   "  b:1: 8092\n"
+                   "models:\n"
+                   '  - { name: "a:1", engine: llamacpp, size_gb: 1, role: medium,'
+                   ' priority: 1, port: 8091, hf_repo: "o/r", quant_file: "a.gguf" }\n')
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+            fh.write(content)
+            path = fh.name
+        try:
+            ports = planner.load_ports(path)
+            self.assertEqual(ports.get("a:1"), 8091)
+            self.assertEqual(ports.get("b:1"), 8092)
+            # and the models section still parses with llamacpp fields
+            models = planner.load_manifest(path)
+            self.assertEqual(models[0]["port"], 8091)
+            self.assertEqual(models[0]["hf_repo"], "o/r")
+        finally:
+            os.unlink(path)
+
+    def test_verify_covers_llamacpp(self):
+        models = [LC("cpp:1", 5, "medium", 1, 8091)]
+        result = planner.build_verification(models, {"cpp:1": 8.0})  # 60% over
+        self.assertEqual(len(result["diverged"]), 1)
+        self.assertEqual(result["diverged"][0]["name"], "cpp:1")
 
     def test_reserve_floor_boundary_exact(self):
         # size exactly equals budget -> fits.
