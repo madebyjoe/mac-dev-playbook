@@ -423,6 +423,27 @@ def build_verification(models, present):
 
 
 # --------------------------------------------------------------------------- #
+# Manifest lint — serves_alias uniqueness (F12/T16)
+# --------------------------------------------------------------------------- #
+def lint_manifest(models):
+    """Return violations: any (alias, role) claimed by more than one entry.
+
+    F12: at most one serves_alias per alias per role. The snippet emits a bare
+    model_name for each marked entry, so two claimants would render duplicate,
+    conflicting alias definitions.
+    """
+    claims = {}
+    for m in models:
+        alias = m.get("serves_alias")
+        if not alias:
+            continue
+        role = str(m.get("role", "")).lower()
+        claims.setdefault((alias, role), []).append(m.get("name"))
+    return [{"alias": a, "role": r, "entries": names}
+            for (a, r), names in sorted(claims.items()) if len(names) > 1]
+
+
+# --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
 def render_human(plan):
@@ -466,7 +487,8 @@ def main(argv=None):
     default_manifest = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "model_manifest.yml")
     p.add_argument("--manifest", default=default_manifest)
-    p.add_argument("--role", required=True, choices=["small", "medium"])
+    p.add_argument("--role", choices=["small", "medium"],
+                   help="node role; required for planning, ignored by --lint/--verify")
     p.add_argument("--models-dir", default=os.path.expanduser("~/.ollama/models"),
                    help="ollama models dir; its volume's free space is the shared budget")
     p.add_argument("--llamacpp-models-dir",
@@ -480,11 +502,28 @@ def main(argv=None):
                    help="stdout format; the human-readable plan always goes to stderr too")
     p.add_argument("--verify", action="store_true",
                    help="compare declared vs actual sizes of present models instead of planning")
+    p.add_argument("--lint", action="store_true",
+                   help="validate serves_alias uniqueness (<=1 per alias per role) and exit")
     p.add_argument("--dry-run", action="store_true",
                    help="explicit no-op flag; the planner never pulls or deletes regardless")
     args = p.parse_args(argv)
 
     models = load_manifest(args.manifest)
+
+    if args.lint:
+        violations = lint_manifest(models)
+        for v in violations:
+            sys.stderr.write(
+                "lint: alias '%s' claimed by %d entries in role %s: %s\n"
+                % (v["alias"], len(v["entries"]), v["role"], ", ".join(v["entries"])))
+        if violations:
+            return 1
+        sys.stderr.write("lint: OK — serves_alias unique per alias per role\n")
+        return 0
+
+    if not args.verify and not args.role:
+        p.error("--role is required for planning")
+
     ports = load_ports(args.manifest)
     present = dict(ollama_list(args.ollama_bin))
     present.update(llamacpp_present(models, args.llamacpp_models_dir))

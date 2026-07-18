@@ -14,6 +14,12 @@
 #   size_gb   — declared download size, used by the planner
 #   role      — small (M1 Pro 32GB) | medium (M4 Pro 48GB) | either
 #   priority  — lower pulls first, per role
+#   serves_alias — (optional, schema v1.1) the bare LiteLLM alias this entry
+#               backs (e.g. small, medium, embed, transcribe). At most ONE entry
+#               per alias per role — enforced by `plan_model_pulls.py --lint`,
+#               which tasks/litellm-artifact.yml runs before rendering. The
+#               snippet emits a bare `model_name: <alias>` block for it in
+#               addition to the role-namespaced entry.
 #   notes     — RAM caveats, alias mapping, verify flags
 #
 # PRIORITIES ARE A PROPOSAL — reorder to taste before ratifying G25.
@@ -28,7 +34,7 @@ models:
   - { name: "qwen3.5:0.8b-mlx",        engine: ollama, size_gb: 1.2,  role: small,  priority: 10, notes: "Verified. Tagging/extraction tier." }
   - { name: "qwen3.5:2b-mlx",          engine: ollama, size_gb: 3.1,  role: small,  priority: 20, notes: "Verified." }
   - { name: "qwen3.5:4b-mlx",          engine: ollama, size_gb: 4.2,  role: small,  priority: 30, notes: "Estimate — verify (GGUF is 3.4GB; MLX runs slightly larger)." }
-  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias candidate." }
+  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, serves_alias: small, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias (serves_alias, confirm at review)." }
   - { name: "gemma4:e2b-mlx",          engine: ollama, size_gb: 7.2,  role: small,  priority: 50, notes: "GGUF size verified at 7.2GB; confirm MLX tag size on first pull." }
   - { name: "gemma4:e4b-mlx",          engine: ollama, size_gb: 9.6,  role: small,  priority: 60, notes: "GGUF size verified; confirm MLX tag. Strong small-tier generalist w/ vision+audio." }
   - { name: "ornith:9b",               engine: ollama, size_gb: 5.6,  role: small,  priority: 70, notes: "Verified. Agentic coding, Qwen3.5 base, MIT." }
@@ -43,7 +49,7 @@ models:
   - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, notes: "Estimate — verify." }
 
   # ── medium role — M4 Pro (48GB) ───────────────────────────────────────────
-  - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, notes: "Verified 20GB. Dense 27B; primary `medium` alias candidate." }
+  - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, serves_alias: medium, notes: "Verified 20GB. Dense 27B; primary `medium` alias (serves_alias, confirm at review)." }
   - { name: "qwen3.6:35b-mlx",         engine: ollama, size_gb: 22,   role: medium, priority: 20, notes: "Verified 22GB. 35B-A3B MoE — faster than the 27B dense at similar quality." }
   - { name: "glm-4.7-flash:latest",    engine: ollama, size_gb: 19,   role: medium, priority: 30, notes: "Verified. 30B-A3B MoE, MIT; requires Ollama >=0.14.3." }
   - { name: "qwen3-coder:latest",      engine: ollama, size_gb: 19,   role: medium, priority: 40, notes: "Estimate — verify current :latest mapping (30B-A3B Q4 ~= 19GB)." }

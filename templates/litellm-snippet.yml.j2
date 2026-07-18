@@ -3,18 +3,29 @@
 #
 # Apply this on the LiteLLM router (Unraid). The playbook only EMITS this file
 # (F8); it never reaches across to the router. Regenerated whenever this
-# inference node is provisioned. Aliases are role-namespaced ("<role>/<model>");
-# confirm against Brief 1's alias register before applying.
+# inference node is provisioned. api_base uses the host's LAN IP (G30 = LAN,
+# G33 raw lan_ip). Bare aliases (model_name: "<alias>") are AUTHORITATIVE — they
+# come from manifest serves_alias markers; only NEW aliases still need confirming
+# against Brief 1's register. Role-namespaced entries (model_name: "<role>/<model>")
+# are also emitted.
 model_list:
 {% for m in litellm_models %}
+{% set _prefix = 'openai' if m.engine == 'llamacpp' else 'ollama' %}
+{% set _port = m.port if m.engine == 'llamacpp' else 11434 %}
   - model_name: "{{ inference_role }}/{{ m.name }}"
     litellm_params:
+      model: "{{ _prefix }}/{{ m.name }}"
+      api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
 {% if m.engine == 'llamacpp' %}
-      model: "openai/{{ m.name }}"
-      api_base: "http://{{ tailnet_name | default(inventory_hostname) }}:{{ m.port }}/v1"
       api_key: "dummy"
-{% else %}
-      model: "ollama/{{ m.name }}"
-      api_base: "http://{{ tailnet_name | default(inventory_hostname) }}:11434/v1"
+{% endif %}
+{% if m.serves_alias is defined and m.serves_alias %}
+  - model_name: "{{ m.serves_alias }}"
+    litellm_params:
+      model: "{{ _prefix }}/{{ m.name }}"
+      api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
+{% if m.engine == 'llamacpp' %}
+      api_key: "dummy"
+{% endif %}
 {% endif %}
 {% endfor %}

@@ -223,6 +223,34 @@ class TestLlamacpp(unittest.TestCase):
         self.assertNotIn("evict", plan)
 
 
+class TestServesAliasLint(unittest.TestCase):
+
+    def test_clean_manifest_has_no_violations(self):
+        models = [M("a:1", "ollama", 5, "small", 1), M("b:1", "ollama", 5, "medium", 1)]
+        models[0]["serves_alias"] = "small"
+        models[1]["serves_alias"] = "medium"
+        self.assertEqual(planner.lint_manifest(models), [])
+
+    def test_two_claimants_same_alias_and_role_is_a_violation(self):
+        models = [M("a:1", "ollama", 5, "small", 1), M("b:1", "ollama", 5, "small", 2)]
+        models[0]["serves_alias"] = "small"
+        models[1]["serves_alias"] = "small"
+        violations = planner.lint_manifest(models)
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0]["alias"], "small")
+        self.assertEqual(set(violations[0]["entries"]), {"a:1", "b:1"})
+
+    def test_same_alias_different_roles_is_allowed(self):
+        # per-role uniqueness: 'embed' could legitimately exist once per role
+        models = [M("a:1", "ollama", 5, "small", 1), M("b:1", "ollama", 5, "medium", 1)]
+        models[0]["serves_alias"] = "embed"
+        models[1]["serves_alias"] = "embed"
+        self.assertEqual(planner.lint_manifest(models), [])
+
+    def test_shipped_manifest_lints_clean(self):
+        self.assertEqual(planner.lint_manifest(planner.load_manifest(_MANIFEST)), [])
+
+
 class TestManifestParsing(unittest.TestCase):
 
     def test_parses_flow_style(self):
