@@ -12,7 +12,13 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>OLLAMA_HOST</key>
-        <string>{{ ollama_host | default('0.0.0.0:11434') }}</string>
+        {#- Loopback by default. A non-loopback bind exposes an UNAUTHENTICATED
+            inference API on that interface (ollama has no auth of its own). Only
+            inference-role group_vars set a non-loopback `ollama_bind`, and the
+            preferred value is the host's Tailscale interface IP so LiteLLM on
+            Unraid reaches the backend over the tailnet -- never 0.0.0.0. The
+            work VLAN is a backstop, not the access control. -#}
+        <string>{{ ollama_bind | default('127.0.0.1:11434') }}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

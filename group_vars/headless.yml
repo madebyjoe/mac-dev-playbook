@@ -24,14 +24,9 @@ profile_homebrew_cask_apps: # Remote GUI
 profile_mas_apps:
   - { id: 497799835, name:  "Xcode" }
 
-# Ollama configuration
-ollama_host: "0.0.0.0:11434"  # Listen on all interfaces
-ollama_models:
-  - gpt-oss:20b
-  - qwen3-coder:30b
-  - qwen2.5-coder:7b
-  - qwen2.5-coder:14b
-  - qwen2.5-coder:32b
-  - llama3.1:8b
-  - gemma3:12b
-  - gemma3:27b
+# NOTE: Ollama bind address and the model list are NOT set here. Per Brief F4,
+# inference configuration (bind, keep-alive, model selection) keys off
+# inference-role groups (inference_small / inference_medium), never off the
+# headless profile. The bind defaults to loopback (127.0.0.1:11434); a role
+# group overrides `ollama_bind` with the host's Tailscale IP. The old flat
+# `ollama_models` list is replaced by the storage-aware manifest in Phase 3.

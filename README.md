@@ -59,6 +59,14 @@ You can filter which part of the provisioning process to run by specifying a set
 
     ansible-playbook main.yml --limit personal --tags "homebrew"
 
+### Ollama network binding
+
+The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default**. Ollama has no authentication of its own, so a non-loopback bind exposes an unauthenticated inference API on that interface. Override the bind only where you intend to serve inference, and prefer the host's Tailscale interface IP over `0.0.0.0`:
+
+- `ollama_bind` — the `OLLAMA_HOST` value written into the plist (e.g. `100.x.y.z:11434` for a tailnet IP). Set via inference-role group_vars, not per profile.
+
+Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). Full inference-role wiring (`inference_small` / `inference_medium` groups, keep-alive, model manifest) arrives in a later phase.
+
 ## Post Installation
 
 Some things can be configured automatically from the playbook but a bunch of things require login directly.
