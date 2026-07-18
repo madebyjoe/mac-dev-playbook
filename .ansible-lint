@@ -1,0 +1,8 @@
+---
+# ansible-lint configuration — https://ansible.readthedocs.io/projects/lint/
+# Default ruleset (all rules). The playbook is expected to lint clean.
+
+exclude_paths:
+  - artifacts/        # generated LiteLLM snippets (gitignored)
+  - .github/          # workflow YAML, not Ansible content
+  - tests/            # Python unit tests

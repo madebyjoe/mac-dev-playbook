@@ -41,11 +41,11 @@ profile_homebrew_cask_apps:
 
 profile_mas_apps:
   - { id: 1672085276, name: "Aiko" }
-  - { id: 425264550, name:  "Blackmagic Disc Speed Test" }
+  - { id: 425264550, name: "Blackmagic Disc Speed Test" }
   - { id: 1435957248, name: "Drafts" }
   - { id: 1465439395, name: "Dark Noise" }
   - { id: 1358823008, name: "Flighty" }
   - { id: 1502839586, name: "Hand Mirror" }
   - { id: 1303222628, name: "Paprika" }
   - { id: 1153157709, name: "Speedtest" }
-  - { id: 497799835, name:  "Xcode" }
+  - { id: 497799835, name: "Xcode" }

@@ -25,7 +25,7 @@ profile_homebrew_cask_apps: # Remote GUI
 
 
 profile_mas_apps:
-  - { id: 497799835, name:  "Xcode" }
+  - { id: 497799835, name: "Xcode" }
 
 # NOTE: Ollama bind address and the model list are NOT set here. Per Brief F4,
 # inference configuration (bind, keep-alive, model selection) keys off

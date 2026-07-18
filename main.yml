@@ -16,7 +16,7 @@
 
   pre_tasks:
     - name: Display installation plan
-      debug:
+      ansible.builtin.debug:
         msg:
           - "Profile: {{ group_names }}"
           - "Total packages: {{ homebrew_packages | length }}"
@@ -24,32 +24,33 @@
           - "Total MAS apps: {{ mas_apps | length }}"
 
     - name: Ensure Rosetta 2 is installed (Apple Silicon only)
+      when: ansible_architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
       block:
         - name: Check CPU architecture
-          command: uname -m
+          ansible.builtin.command: uname -m
           register: cpu_arch
           changed_when: false
 
         - name: Check for Rosetta 2
-          stat:
+          ansible.builtin.stat:
             path: /Library/Apple/usr/share/rosetta/rosetta
           register: rosetta_check
 
         - name: Install Rosetta 2
-          command: softwareupdate --install-rosetta --agree-to-license
+          ansible.builtin.command: softwareupdate --install-rosetta --agree-to-license
           become: true  # softwareupdate --install-rosetta requires root; play runs become:false
           when: not rosetta_check.stat.exists
-
-      when: ansible_architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
+          changed_when: true
 
     - name: Ensure Homebrew is installed
-      stat:
+      ansible.builtin.stat:
         path: /opt/homebrew/bin/brew
       register: homebrew_check
 
     - name: Install Homebrew (if missing)
-      shell: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      ansible.builtin.shell: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
       when: not homebrew_check.stat.exists
+      changed_when: true
 
   tasks:
     # F9: each install runs in BULK first (one fast brew invocation). If the
@@ -60,6 +61,7 @@
     # interactive behaviour).
 
     - name: Ensure Homebrew taps are present
+      tags: ['homebrew']
       block:
         - name: Add Homebrew taps (bulk)
           community.general.homebrew_tap:
@@ -75,11 +77,14 @@
           register: tap_items
           failed_when: false
         - name: Record failed taps
-          set_fact:
-            failed_taps: "{{ (tap_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-      tags: ['homebrew']
+          ansible.builtin.set_fact:
+            failed_taps: >-
+              {{ (tap_items.results | default([]))
+                 | selectattr('failed', 'defined') | selectattr('failed')
+                 | map(attribute='item') | list }}
 
     - name: Ensure CLI packages are installed
+      tags: ['homebrew']
       block:
         - name: Install CLI packages (bulk)
           community.general.homebrew:
@@ -97,11 +102,14 @@
           register: package_items
           failed_when: false
         - name: Record failed packages
-          set_fact:
-            failed_packages: "{{ (package_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-      tags: ['homebrew']
+          ansible.builtin.set_fact:
+            failed_packages: >-
+              {{ (package_items.results | default([]))
+                 | selectattr('failed', 'defined') | selectattr('failed')
+                 | map(attribute='item') | list }}
 
     - name: Ensure Cask applications are installed
+      tags: ['homebrew']
       block:
         - name: Install casks (bulk)
           community.general.homebrew_cask:
@@ -119,20 +127,22 @@
           register: cask_items
           failed_when: false
         - name: Record failed casks
-          set_fact:
-            failed_casks: "{{ (cask_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
-      tags: ['homebrew']
+          ansible.builtin.set_fact:
+            failed_casks: >-
+              {{ (cask_items.results | default([]))
+                 | selectattr('failed', 'defined') | selectattr('failed')
+                 | map(attribute='item') | list }}
 
     # --- Mac App Store ---
     - name: Check if mas is installed (required for App Store apps)
-      stat:
+      ansible.builtin.stat:
         path: /opt/homebrew/bin/mas
       register: mas_binary
       when: mas_apps | length > 0
       tags: ['mas']
 
     - name: Check if signed into App Store
-      command: /opt/homebrew/bin/mas account
+      ansible.builtin.command: /opt/homebrew/bin/mas account
       register: mas_account
       failed_when: false
       changed_when: false
@@ -142,7 +152,7 @@
       tags: ['mas']
 
     - name: Warning if not signed into App Store
-      debug:
+      ansible.builtin.debug:
         msg: "WARNING: Not signed into App Store; MAS apps will be skipped. Sign in via the App Store GUI first."
       when:
         - mas_apps | length > 0
@@ -162,14 +172,17 @@
       tags: ['mas']
 
     - name: Record failed MAS apps
-      set_fact:
-        failed_mas: "{{ (mas_items.results | default([])) | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | map(attribute='name') | list }}"
+      ansible.builtin.set_fact:
+        failed_mas: >-
+          {{ (mas_items.results | default([]))
+             | selectattr('failed', 'defined') | selectattr('failed')
+             | map(attribute='item') | map(attribute='name') | list }}
       when: mas_apps | length > 0
       tags: ['mas']
 
     # --- Strict failure gate (F9) ---
     - name: Assert all installs succeeded (strict; -e soft_fail=true to bypass)
-      assert:
+      ansible.builtin.assert:
         that:
           - (failed_taps | default([])) | length == 0
           - (failed_packages | default([])) | length == 0
@@ -185,7 +198,7 @@
       tags: ['homebrew', 'mas']
 
     - name: Summary of failures (soft_fail mode)
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=== Installation Summary (soft_fail) ==="
           - "Failed taps: {{ failed_taps | default([]) }}"
@@ -196,7 +209,7 @@
 
     # Configuration tasks
     - name: Configure Ollama
-      import_tasks: tasks/configure-ollama.yml
+      ansible.builtin.import_tasks: tasks/configure-ollama.yml
       # F3: work-profile (MDM-managed) machines never serve inference. Guard on
       # group membership in addition to the package condition.
       when:
@@ -205,14 +218,14 @@
       tags: ['config', 'ollama']
 
     - name: Pull inference models (storage-aware)
-      import_tasks: tasks/pull-models.yml
+      ansible.builtin.import_tasks: tasks/pull-models.yml
       when: >-
         ('work' not in group_names) and
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'models']
 
     - name: Emit LiteLLM router snippet
-      import_tasks: tasks/litellm-artifact.yml
+      ansible.builtin.import_tasks: tasks/litellm-artifact.yml
       when: >-
         ('work' not in group_names) and
         (('inference_small' in group_names) or ('inference_medium' in group_names))
@@ -222,8 +235,8 @@
     # Bounce the Ollama service only when the plist actually changed (F7).
     # bootout + bootstrap in the gui/$UID domain replaces deprecated
     # launchctl unload/load; runs as the user, no root needed.
-    - name: restart ollama
-      shell: |
+    - name: Restart Ollama
+      ansible.builtin.shell: |
         uid=$(id -u)
         launchctl bootout "gui/${uid}/com.ollama.serve" 2>/dev/null || true
         launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"

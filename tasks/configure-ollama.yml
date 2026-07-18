@@ -1,6 +1,6 @@
 ---
 - name: Check if Ollama is installed
-  command: which ollama
+  ansible.builtin.command: which ollama
   register: ollama_check
   failed_when: false
   changed_when: false
@@ -10,13 +10,13 @@
   when: ollama_check.rc == 0
   block:
     - name: Ensure LaunchAgents directory exists
-      file:
+      ansible.builtin.file:
         path: "{{ ansible_env.HOME }}/Library/LaunchAgents"
         state: directory
         mode: '0755'
 
     - name: Ensure Ollama log directory exists
-      file:
+      ansible.builtin.file:
         path: "{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}"
         state: directory
         mode: '0755'
@@ -25,16 +25,16 @@
     # bounced (bootout + bootstrap, dropping resident models) exclusively when
     # the rendered plist actually changes -- not on every run (F7).
     - name: Template Ollama launchd plist
-      template:
+      ansible.builtin.template:
         src: templates/ollama.plist.j2
         dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
         mode: '0644'
-      notify: restart ollama
+      notify: Restart Ollama
 
     # Idempotent load: bootstrap the service only if it is not already loaded.
     # This does NOT bounce a running service, so residency is preserved.
     - name: Ensure Ollama service is bootstrapped
-      shell: |
+      ansible.builtin.shell: |
         uid=$(id -u)
         if ! launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1; then
           launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
@@ -47,7 +47,7 @@
     # only to hosts in an inference-role group (F4); requires root.
     - name: Prevent system sleep on AC power (inference nodes only)
       become: true
-      command: pmset -c sleep 0
+      ansible.builtin.command: pmset -c sleep 0
       when: >-
         ('inference_small' in group_names) or
         ('inference_medium' in group_names)
