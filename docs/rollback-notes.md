@@ -61,3 +61,27 @@ task requires a sudo password — pass `-K` when running against an inference no
 `git revert <T8>` restores the old per-item `failed_when: false` install loops
 and removes the final assert. No machine state is involved. If you need the old
 non-failing behaviour without reverting, run with `-e soft_fail=true`.
+
+## Phase 3 — Inference roles & storage-aware model system
+
+The whole model system is **additive and non-destructive**, so rollback is
+simply reverting commits — there is nothing to undo on disk.
+
+### T9 — Inference role groups
+`git revert <T9>` removes the `[inference_small]`/`[inference_medium]` groups and
+their group_vars. The groups are empty by default, so no host loses
+configuration unless you had added one to a role.
+
+### T10 — Manifest, planner, pull task
+`git revert <T10>` removes `model_manifest.yml`, `scripts/plan_model_pulls.py`,
+`tasks/pull-models.yml`, and the tests. **No models are ever deleted by any code
+path** — the planner only recommends evictions, and pulls are gated behind
+`model_pull_dry_run=false`. Any models already pulled by the human stay on disk;
+reverting the code does not touch them. To stop pulling without reverting, leave
+`model_pull_dry_run` at its default (`true`).
+
+### T11 — LiteLLM router artifact
+`git revert <T11>` removes the template and the emit task. The generated files
+live under `artifacts/` (gitignored) and are never applied by the playbook, so
+reverting has no external effect; delete `artifacts/litellm/*.yml` by hand if you
+want them gone. The router on Unraid is never touched by this repo.
