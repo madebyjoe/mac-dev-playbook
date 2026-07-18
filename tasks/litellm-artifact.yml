@@ -12,12 +12,15 @@
   block:
     - name: Load the model manifest
       ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/model_manifest.yml"
+        file: "{{ model_manifest_path }}"
         name: manifest
 
-    - name: Select the ollama models this node serves for its role
+    - name: Select the served models (ollama + llamacpp) for this node's role
       ansible.builtin.set_fact:
-        litellm_models: "{{ manifest.models | selectattr('engine', 'equalto', 'ollama') | selectattr('role', 'in', [inference_role, 'either']) | list }}"
+        litellm_models: >-
+          {{ manifest.models
+             | selectattr('engine', 'in', ['ollama', 'llamacpp'])
+             | selectattr('role', 'in', [inference_role, 'either']) | list }}
 
     - name: Ensure the artifacts directory exists
       ansible.builtin.file:

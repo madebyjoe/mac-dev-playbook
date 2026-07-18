@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.llamacpp.{{ llamacpp_label }}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ llamacpp_server_bin | default('/opt/homebrew/bin/llama-server') }}</string>
+        <string>--model</string>
+        <string>{{ llamacpp_model_path }}</string>
+        <!-- Loopback by default (F2); an inference role sets tailnet_ip. llama-server
+             has no auth, so a non-loopback bind must be a tailnet IP, never 0.0.0.0. -->
+        <string>--host</string>
+        <string>{{ tailnet_ip | default('127.0.0.1') }}</string>
+        <string>--port</string>
+        <string>{{ llamacpp_port }}</string>
+        <!-- Offload all layers to the Apple Silicon GPU (Metal). -->
+        <string>--n-gpu-layers</string>
+        <string>-1</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{ llamacpp_log_dir }}/{{ llamacpp_label }}.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ llamacpp_log_dir }}/{{ llamacpp_label }}.err</string>
+</dict>
+</plist>

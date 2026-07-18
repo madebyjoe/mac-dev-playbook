@@ -13,6 +13,11 @@
     homebrew_packages: "{{ (core_homebrew_packages | default([]) + profile_homebrew_packages | default([])) | unique }}"
     homebrew_cask_apps: "{{ (core_homebrew_cask_apps | default([]) + profile_homebrew_cask_apps | default([])) | unique }}"
     mas_apps: "{{ (core_mas_apps | default([]) + profile_mas_apps | default([])) | unique }}"
+    # Inference model system (F5/F6.1). Override model_manifest_path to point at a
+    # synthetic manifest when testing.
+    model_manifest_path: "{{ playbook_dir }}/model_manifest.yml"
+    llamacpp_models_dir: "{{ ansible_env.HOME }}/.cache/llamacpp/models"
+    llamacpp_log_dir: "{{ ansible_env.HOME }}/Library/Logs/llamacpp"
 
   pre_tasks:
     - name: Display installation plan
@@ -223,6 +228,13 @@
         ('work' not in group_names) and
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'models']
+
+    - name: Configure llama.cpp services
+      ansible.builtin.import_tasks: tasks/configure-llamacpp.yml
+      when: >-
+        ('work' not in group_names) and
+        (('inference_small' in group_names) or ('inference_medium' in group_names))
+      tags: ['config', 'llamacpp']
 
     - name: Emit LiteLLM router snippet
       ansible.builtin.import_tasks: tasks/litellm-artifact.yml

@@ -9,6 +9,12 @@ model_list:
 {% for m in litellm_models %}
   - model_name: "{{ inference_role }}/{{ m.name }}"
     litellm_params:
+{% if m.engine == 'llamacpp' %}
+      model: "openai/{{ m.name }}"
+      api_base: "http://{{ tailnet_name | default(inventory_hostname) }}:{{ m.port }}/v1"
+      api_key: "dummy"
+{% else %}
       model: "ollama/{{ m.name }}"
       api_base: "http://{{ tailnet_name | default(inventory_hostname) }}:11434/v1"
+{% endif %}
 {% endfor %}

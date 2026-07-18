@@ -1,0 +1,94 @@
+---
+# llama.cpp serving (T14, Amendment 1). For an inference-role host, serve each
+# llamacpp manifest entry for its role as its own launchd llama-server instance.
+# Plists are rendered non-destructively; the services are only (re)loaded on a
+# live run (model_pull_dry_run=false). The real fleet manifest has no llamacpp
+# entries, so this whole file no-ops there.
+
+- name: Resolve this host's inference role
+  ansible.builtin.set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
+
+- name: Load the model manifest (for llamacpp entries)
+  ansible.builtin.include_vars:
+    file: "{{ model_manifest_path }}"
+    name: manifest
+  when: inference_role != ''
+
+- name: Select llamacpp models this node serves for its role
+  ansible.builtin.set_fact:
+    llamacpp_models: >-
+      {{ (manifest.models | default([]))
+         | selectattr('engine', 'equalto', 'llamacpp')
+         | selectattr('role', 'in', [inference_role, 'either']) | list }}
+  when: inference_role != ''
+
+- name: Configure llama-server instances
+  when:
+    - inference_role != ''
+    - (llamacpp_models | default([])) | length > 0
+  block:
+    - name: Ensure llama.cpp is installed (provides llama-server)
+      community.general.homebrew:
+        name: llama.cpp
+        state: present
+        update_homebrew: false
+
+    - name: Ensure llama.cpp directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        - "{{ llamacpp_models_dir }}"
+        - "{{ llamacpp_log_dir }}"
+
+    - name: Template a llama-server plist per model
+      ansible.builtin.template:
+        src: templates/llamacpp-server.plist.j2
+        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.llamacpp.{{ item.name | regex_replace('[:/]', '_') }}.plist"
+        mode: '0644'
+      loop: "{{ llamacpp_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        llamacpp_label: "{{ item.name | regex_replace('[:/]', '_') }}"
+        llamacpp_model_path: "{{ llamacpp_models_dir }}/{{ item.quant_file }}"
+        llamacpp_port: "{{ item.port }}"
+      register: llamacpp_plists
+
+    # Live only: (re)load instances whose plist changed. bootout+bootstrap in the
+    # gui/$UID domain, same hygiene as the ollama service.
+    - name: (Re)start changed llama-server instances
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="com.llamacpp.{{ item.item.name | regex_replace('[:/]', '_') }}"
+        plist="{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+        launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+        launchctl bootstrap "gui/${uid}" "$plist"
+      loop: "{{ llamacpp_plists.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - not (model_pull_dry_run | default(true) | bool)
+        - item.changed | default(false)
+      changed_when: true
+
+    # Live only: bootstrap any instance not currently loaded (unchanged plist,
+    # e.g. after a reboot without RunAtLoad having fired yet).
+    - name: Ensure llama-server instances are bootstrapped
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="com.llamacpp.{{ item.name | regex_replace('[:/]', '_') }}"
+        plist="{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+        if ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
+          launchctl bootstrap "gui/${uid}" "$plist"
+          echo bootstrapped
+        fi
+      loop: "{{ llamacpp_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not (model_pull_dry_run | default(true) | bool)
+      register: llamacpp_bootstrap
+      changed_when: "'bootstrapped' in (llamacpp_bootstrap.stdout | default(''))"

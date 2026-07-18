@@ -1,9 +1,10 @@
 ---
-# Storage-aware model pulls (F5/F6). Runs the deterministic planner to produce a
-# JSON plan, shows it, then pulls ONLY the models the planner selected (async,
-# per the existing 30-min pattern). The planner never deletes; eviction is a
-# human decision surfaced as a recommendation. Pulls happen only when the human
-# sets `model_pull_dry_run=false` — the default is a dry plan with no pulls.
+# Storage-aware model pulls (F5/F6.1). Runs the deterministic planner to produce
+# a JSON plan, shows it, then pulls ONLY the models the planner selected: ollama
+# entries via `ollama pull`, llamacpp entries via `huggingface-cli download`
+# (async, per the existing 30-min pattern). The planner never deletes; eviction
+# is a human decision surfaced as a recommendation. Pulls happen only when the
+# human sets `model_pull_dry_run=false` — the default is a dry plan with no pulls.
 
 - name: Resolve this host's inference role
   ansible.builtin.set_fact:
@@ -18,11 +19,13 @@
           - python3
           - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
           - "--manifest"
-          - "{{ playbook_dir }}/model_manifest.yml"
+          - "{{ model_manifest_path }}"
           - "--role"
           - "{{ inference_role }}"
           - "--models-dir"
           - "{{ ollama_models_dir | default(ansible_env.HOME + '/.ollama/models') }}"
+          - "--llamacpp-models-dir"
+          - "{{ llamacpp_models_dir }}"
           - "--reserve-floor-gb"
           - "{{ reserve_floor_gb | default(100) }}"
           - "--format"
@@ -41,10 +44,10 @@
         msg: "{{ model_plan_raw.stderr_lines }}"
 
     # Pulls are gated behind model_pull_dry_run (default true). The executor
-    # never runs this live; it is the human's call at review time.
-    - name: Pull selected models (async, 30 min each)
+    # never runs these live; it is the human's call at review time.
+    - name: Pull selected ollama models (async, 30 min each)
       ansible.builtin.command: "ollama pull {{ item.name }}"
-      loop: "{{ model_plan.pull }}"
+      loop: "{{ model_plan.pull | selectattr('engine', 'equalto', 'ollama') | list }}"
       loop_control:
         label: "{{ item.name }}"
       when: not (model_pull_dry_run | default(true) | bool)
@@ -53,17 +56,36 @@
       async: 1800
       poll: 30
 
-    # Reconcile declared size_gb against actual on-disk size and warn on >20%
-    # divergence, feeding manifest corrections back to the human (F5).
+    - name: Download selected llama.cpp GGUF quants (async, 30 min each)
+      ansible.builtin.command:
+        argv:
+          - huggingface-cli
+          - download
+          - "{{ item.hf_repo }}"
+          - "{{ item.quant_file }}"
+          - "--local-dir"
+          - "{{ llamacpp_models_dir }}"
+      loop: "{{ model_plan.pull | selectattr('engine', 'equalto', 'llamacpp') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not (model_pull_dry_run | default(true) | bool)
+      changed_when: true
+      async: 1800
+      poll: 30
+
+    # Reconcile declared size_gb against actual on-disk size (both engines) and
+    # warn on >20% divergence, feeding manifest corrections back to the human.
     - name: Verify pulled model sizes against the manifest
       ansible.builtin.command:
         argv:
           - python3
           - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
           - "--manifest"
-          - "{{ playbook_dir }}/model_manifest.yml"
+          - "{{ model_manifest_path }}"
           - "--role"
           - "{{ inference_role }}"
+          - "--llamacpp-models-dir"
+          - "{{ llamacpp_models_dir }}"
           - "--verify"
       register: model_verify_raw
       changed_when: false
