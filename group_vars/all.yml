@@ -1,4 +1,22 @@
 ---
+# --- Connection derived from .env (MDP-2) --------------------------------------
+# Edit .env ONLY (never the inventory) to point a host at a remote Mac:
+#   MAC_<HOST>_SSH_USER present -> drive that host over SSH, to MAC_<HOST>_SSH_HOST
+#                                  (or its MAC_<HOST>_LAN_IP if SSH_HOST is unset)
+#   absent                      -> run locally on the box itself (the default)
+# The connection must be resolved BEFORE any task runs, so it is read here at
+# variable-resolution time via a lookup. This is why the inventory host lines must
+# NOT set `ansible_connection` inline (an inline host var would outrank this).
+# inventory_dir (not playbook_dir) so ad-hoc `ansible` commands also resolve it.
+local_env_path: "{{ inventory_dir }}/.env"
+_env_hostkey: "{{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}"
+_env_ssh_user: "{{ lookup('ansible.builtin.ini', _env_hostkey ~ '_SSH_USER', file=local_env_path, type='properties', default='', errors='ignore') }}"
+_env_ssh_host: "{{ lookup('ansible.builtin.ini', _env_hostkey ~ '_SSH_HOST', file=local_env_path, type='properties', default='', errors='ignore')
+                   or lookup('ansible.builtin.ini', _env_hostkey ~ '_LAN_IP', file=local_env_path, type='properties', default='', errors='ignore') }}"
+ansible_connection: "{{ 'ssh' if _env_ssh_user else 'local' }}"
+ansible_host: "{{ _env_ssh_host if (_env_ssh_user and _env_ssh_host) else inventory_hostname }}"
+ansible_user: "{{ _env_ssh_user if _env_ssh_user else omit }}"
+
 core_homebrew_taps: []
 
 core_homebrew_packages:

@@ -12,7 +12,7 @@
 
 - name: Check for a local .env
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/.env"
+    path: "{{ local_env_path }}"
   register: local_env_file
   delegate_to: localhost
   check_mode: false
@@ -23,7 +23,7 @@
       - python3
       - "{{ playbook_dir }}/scripts/local_env.py"
       - "--json"
-      - "{{ playbook_dir }}/.env"
+      - "{{ local_env_path }}"
   register: local_env_raw
   delegate_to: localhost
   changed_when: false

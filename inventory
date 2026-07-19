@@ -1,27 +1,27 @@
-# Each profile is a DISTINCT host alias (all resolving to the local machine by
-# default). This is deliberate: Ansible resolves group_vars per host, so giving
-# every profile its own host stops work.yml's empty profile_* lists from
-# overriding personal/headless when the plays run.
+# Each profile is a DISTINCT host alias. `--limit` selects which profile's
+# variables apply; the CONNECTION is derived from .env (see group_vars/all.yml):
+#   - no MAC_<HOST>_SSH_USER in .env  -> connection=local  (run ON this box)
+#   - MAC_<HOST>_SSH_USER set         -> connection=ssh     (drive it remotely,
+#                                        to MAC_<HOST>_SSH_HOST or its _LAN_IP)
+# So to point a host at a remote Mac you edit ONLY .env, never this file.
+# Do NOT add ansible_connection/ansible_host here — inline host vars would outrank
+# the .env-derived ones and re-break remote execution.
 #
-# BECAUSE all three aliases are the same physical machine, `--limit` is
-# MANDATORY. Running `ansible-playbook main.yml` with no limit targets all three
-# aliases at once and merges every profile's variables. See README.
+# BECAUSE the three profiles are otherwise the same machine, `--limit` is
+# MANDATORY. Running with no limit targets all three at once and merges vars.
 #
 #   ansible-playbook main.yml --limit personal
 #   ansible-playbook main.yml --limit work
 #   ansible-playbook main.yml --limit headless
 
 [personal]
-mac-personal ansible_connection=local
+mac-personal
 
 [work]
-mac-work ansible_connection=local
+mac-work
 
 [headless]
-mac-headless ansible_connection=local
-# To provision a *remote* headless Mac instead of this machine, comment out the
-# line above and use an SSH alias like:
-# mac-headless ansible_host={remote-ip} ansible_user={client-username} ansible_connection=ssh
+mac-headless
 
 # Inference-role groups (F4) are ORTHOGONAL to profiles. A host may be in one
 # profile group and AT MOST ONE inference-role group. Inference configuration
@@ -29,19 +29,21 @@ mac-headless ansible_connection=local
 # off "ollama happens to be installed". Both are empty by default.
 #
 # Membership is PUBLIC and lives here; ADDRESSES do NOT (F10). A host that joins
-# a role gets its addresses from the gitignored `.env` at the repo root, keyed
-# by hostname (MAC_HEADLESS_LAN_IP, ...). See `.env.example`. Under G30 = LAN the
+# a role gets its addresses from the gitignored `.env` at the repo root, keyed by
+# hostname (MAC_HEADLESS_LAN_IP, ...). See `.env.example`. Under G30 = LAN the
 # bind and the LiteLLM api_base use *_LAN_IP; Tailscale is management-only.
 #
 # Example: make the headless box a small inference node (membership only):
 #   [inference_small]
 #   mac-headless
 [inference_small]
+mac-headless
 
 # Example: make a beefier box (M4 Pro) a medium inference node (membership only):
 #   [inference_medium]
 #   mac-headless
 [inference_medium]
+mac-personal
 
 # All profiles get core packages.
 [profiles:children]
