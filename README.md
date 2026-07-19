@@ -87,6 +87,7 @@ Work-profile machines never get Ollama configured at all (see the work guard in 
 - [runbooks/model-management.md](runbooks/model-management.md) — the model manifest schema, running the storage-aware planner, and how eviction recommendations are handled (by you).
 - [runbooks/llamacpp.md](runbooks/llamacpp.md) — the llama.cpp (second engine) per-model launchd services: start/stop, logs, swapping a quant.
 - [runbooks/transcribe.md](runbooks/transcribe.md) — the `transcribe` (whisper-server, `:8082`) service; `embed` served by ollama `:11434`.
+- [runbooks/verification.md](runbooks/verification.md) — the two-layer test model: `probe_backends.py` (backend liveness) + the router-side `smoke-test.sh` (alias end-to-end).
 - [docs/rollback-notes.md](docs/rollback-notes.md) — per-task rollback procedures.
 - [docs/decision-gates.md](docs/decision-gates.md) — engine policy (F6.1) and the status of decision gates G25–G29.
 
