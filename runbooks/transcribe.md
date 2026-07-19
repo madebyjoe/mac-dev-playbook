@@ -40,8 +40,8 @@ Model file convention: `~/.cache/whisper/models/ggml-<name-without-whisper->.bin
 where `<name>` is the manifest entry (`whisper-large-v3-turbo` → `ggml-large-v3-turbo.bin`).
 
 > **`embed`** is *not* a separate service: it is served by the existing ollama
-> instance on `:11434` (F13 r3; the standalone `:8084` server is retired/unbuilt).
-> See `runbooks/ollama.md` and `runbooks/model-management.md`.
+> instance on `:11434` (F13 r3 — there is no separate embed server). See
+> `runbooks/ollama.md` and `runbooks/model-management.md`.
 
 ## Rollback
 

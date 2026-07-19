@@ -81,6 +81,18 @@ The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default** 
 
 Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). See the runbooks below.
 
+### Headless inference quickstart
+
+The exact sequence to bring a headless Mac up as an inference backend. A bare `--limit headless` run **without** role-group membership intentionally yields a loopback-only node (F4) — role membership is what turns on LAN serving.
+
+1. **Add the host to a role group** in `inventory` (membership only): put `mac-headless` under `[inference_small]` (M1 Pro) or `[inference_medium]` (M4 Pro).
+2. **Fill `.env`** with its LAN IP (`MAC_HEADLESS_LAN_IP=...`, matching the router's static DHCP reservation; G30 = LAN). See `.env.example`.
+3. **Dry check:** `ansible-playbook main.yml --limit headless --ask-become-pass --check` (`--ask-become-pass`/`-K` is needed for the `pmset` never-sleep task). Review the plan and the rendered plist/snippet diffs.
+4. **Provision for real** (pulls models, starts services): rerun without `--check`, adding `-e model_pull_dry_run=false`.
+5. **Verify the backend:** `python3 scripts/probe_backends.py` (or `--only mac-headless`).
+6. **Reconcile the router** (human, on Unraid): diff the emitted `artifacts/litellm/mac-headless.yml` against the router's `config.yaml`, fix `api_base` values (see `runbooks/verification.md`), then `docker compose restart litellm`.
+7. **Alias acceptance** (human): run the router-side `smoke-test.sh` with the `vk-smoke` key.
+
 ## Runbooks
 
 - [runbooks/ollama.md](runbooks/ollama.md) — the Ollama launchd service: where it binds and why, restart/stop, logs, rollback.

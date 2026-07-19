@@ -14,9 +14,10 @@ disk cost zero and are kept. **Nothing is ever deleted**: models that do not fit
 are reported as *deferred* (with the shortfall), and when a higher-priority model
 cannot fit while a lower-priority one is present, the planner prints an *eviction
 recommendation only* — the human decides whether to `ollama rm` anything. The
-current `model_manifest.yml` is **SYNTHETIC** (Standing Rule 2); replace it via
-G25. After a live pull, a verify step compares actual vs declared size and warns on
->20% divergence so the manifest can be corrected.
+current `model_manifest.yml` is the **G25-ratified** manifest (see
+`docs/decision-gates.md`); it still carries "estimate — verify" flags on some
+entries. After a live pull, a verify step compares actual vs declared size and
+warns on >20% divergence so those estimates can be corrected.
 
 ## Engine policy (F6.1, Amendment 1)
 

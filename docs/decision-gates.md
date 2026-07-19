@@ -24,9 +24,20 @@ ratified/open so it lives with the code.
 | **G27** — repo origin (Gitea vs GitHub) | **Open** | Human decision; TODO candidate in README. Executor does nothing here. |
 | **G28** — core container-runtime pruning | **Open** | `docker` + `colima` + `orbstack` all in core; flagged, not changed beyond F3's moves. |
 | **G29** — gaming PC as inference node | **DEFER (default)** | See below. Out of scope for mac-dev-playbook. |
-| **G31** — service definitions for :8082 / :8084 | **RESOLVED (MDP-2 r3)** | Premise corrected: neither service was ever deployed. **G31a transcribe** = build whisper-server (`whisper-cpp`), bind `lan_ip:8082`, no auth (T17). **G31b embed** = consolidate onto ollama `:11434`; the standalone `:8084` server is retired/unbuilt — **port 8084 removed everywhere**. |
+| **G30** — router→backend transport | **RESOLVED = LAN (r2)** | Backends bind `lan_ip`; the snippet `api_base` uses `lan_ip`. The router at `:4000` is the only enforcement door; unauthenticated backend ports must not be reachable off the LAN. Tailscale on the Macs is management-only. **Roaming caveat:** a Mac off-LAN stops serving and the router 503s its aliases (correct, drill D10). See below for the Task 9a firewall consequence (r3). |
+| **G31** — service definitions for :8082 / :8084 | **RESOLVED (r3)** | Neither service was ever deployed. **G31a transcribe** = build whisper-server (`whisper-cpp`), bind `lan_ip:8082`, no auth (T17). **G31b embed** = consolidate onto ollama `:11434`; the standalone `:8084` server is retired/unbuilt — **port 8084 removed everywhere**. |
+| **G32** — smoke-test virtual key | **Router-side, human** | `vk-smoke`: low-privilege LiteLLM virtual key allow-listing exactly `small`, `medium`, `transcribe`, `embed` — never `caption-unfiltered`. Created on the router; value goes only into `.env`. The negative-auth assertion lives in the router-side `smoke-test.sh`, not this repo. |
+| **G33** — snippet `api_base` naming | **RESOLVED = raw `lan_ip` (v1)** | Backed by static DHCP reservations. Unbound names (`m1pro.…internal`) survive readdressing but add a DNS dependency to the inference path — flagged as a later amendment, not implemented here. |
 
-> G30, G32, G33 (MDP-2) are recorded with T19. G30 = LAN (transport); G32 = smoke-test virtual key (router-side, human); G33 = raw `lan_ip` api_base.
+### G30 firewall consequence — Task 9a rows (r3, doc reference only)
+
+The executor never touches firewall config. Recorded so the Task 8/9 work stays in
+sync: the **M1 Pro has moved to the ServerPhysical VLAN**, so all Unraid → M1 Pro
+flows (`11434`, `8082`) are now **intra-VLAN — no rows required**. The **sole
+surviving cross-VLAN row** is `Unraid (LiteLLM) → M4PRO_HOST : 11434/tcp` (single
+direction, justification: LiteLLM backend reach). It works today under the
+allow-to-any pattern; that one row must land before Task 9 enforcement cutover.
+Remember the `LocalVLANs` checklist item if any Mac changes segments.
 
 ## G29 — gaming PC as inference node (deferred)
 

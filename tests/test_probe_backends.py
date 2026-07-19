@@ -124,9 +124,9 @@ class TestTargetDerivation(unittest.TestCase):
     def test_ports_for_small_are_ollama_plus_whisper(self):
         ports = probe_backends.ports_for_role(self._models(), "small")
         got = {(p, s) for (p, s, _path) in ports}
+        # exactly ollama + whisper for the M1 Pro; the exact set forbids any
+        # retired embed port from creeping back in (F13 r3).
         self.assertEqual(got, {(11434, "ollama"), (8082, "transcribe")})
-        # r3: no 8084 anywhere
-        self.assertNotIn(8084, [p for (p, _s, _path) in ports])
 
     def test_ports_for_medium_include_llamacpp(self):
         ports = probe_backends.ports_for_role(self._models(), "medium")

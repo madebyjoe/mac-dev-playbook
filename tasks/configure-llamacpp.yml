@@ -28,9 +28,11 @@
     - inference_role != ''
     - (llamacpp_models | default([])) | length > 0
   block:
-    - name: Ensure llama.cpp is installed (provides llama-server)
+    - name: Ensure llama.cpp and huggingface-cli are installed
       community.general.homebrew:
-        name: llama.cpp
+        name:
+          - llama.cpp          # provides llama-server
+          - huggingface-cli    # the GGUF pull path (T19: closes the dependency gap)
         state: present
         update_homebrew: false
 

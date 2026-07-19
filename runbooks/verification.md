@@ -22,12 +22,21 @@ python3 scripts/probe_backends.py --expect-down mac-headless   # drill D10 backe
 
 It reads LAN IPs from `.env`, role membership from `inventory`, and the port set
 from `model_manifest.yml` (11434 per ollama host + 8082 for the M1 Pro whisper
-service + any llamacpp ports — no `:8084`, F13 r3). A probe **PASSES** when the
+service + any llamacpp ports; F13 r3). A probe **PASSES** when the
 server answers with any HTTP status; it **FAILS** on connection refused/timeout.
 Exit is non-zero on any unexpected state, including under `--expect-down` (up when
 it should be down → FAIL).
 
 ## Alias layer — router-side `smoke-test.sh` (cross-reference)
+
+> **Reconcile first (parallel-track P5).** The router package's `config.yaml` was
+> authored before the F6.1 engine decision and points `small`/`medium` at a
+> `llama-server :8081`. Before running the alias layer, diff the playbook-emitted
+> snippet (`artifacts/litellm/<host>.yml`) against the live `config.yaml` and
+> correct **every** `api_base` to the ports this repo serves — ollama `:11434`
+> (`small`, `medium`, `embed`) and whisper `:8082` (`transcribe`) — then
+> `docker compose restart litellm`. The snippet is the verification artifact; the
+> human edits the live config.
 
 Run it on Unraid with the low-privilege `vk-smoke` virtual key (G32), never the
 master key. It owns every Brief 1 acceptance criterion so nothing is orphaned
