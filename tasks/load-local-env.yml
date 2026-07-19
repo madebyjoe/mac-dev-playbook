@@ -31,7 +31,15 @@
   vars:
     _env: "{{ (local_env_raw.stdout | default('{}')) | from_json }}"
     _hostkey: "{{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}"
-  when: local_env_file.stat.exists
+  # Only run when this host actually has at least one address key: if every value
+  # were `omit`, set_fact would get zero keys and error. A host with no keys (e.g.
+  # a work Mac in a shared .env) simply keeps the group_vars/loopback defaults.
+  when:
+    - local_env_file.stat.exists
+    - >-
+      (_hostkey ~ '_LAN_IP') in _env or
+      (_hostkey ~ '_TAILNET_IP') in _env or
+      (_hostkey ~ '_TAILNET_NAME') in _env
 
 # F15: an inference-role host MUST resolve a LAN bind address (G30 = LAN) or the
 # run fails loudly, naming the missing key — never a silent loopback bind that
