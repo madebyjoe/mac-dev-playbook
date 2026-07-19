@@ -16,11 +16,11 @@
     # Inference model system (F5/F6.1). Override model_manifest_path to point at a
     # synthetic manifest when testing.
     model_manifest_path: "{{ playbook_dir }}/model_manifest.yml"
-    llamacpp_models_dir: "{{ ansible_env.HOME }}/.cache/llamacpp/models"
-    llamacpp_log_dir: "{{ ansible_env.HOME }}/Library/Logs/llamacpp"
+    llamacpp_models_dir: "{{ ansible_facts.env.HOME }}/.cache/llamacpp/models"
+    llamacpp_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/llamacpp"
     # transcribe (whisper-server) service — M1 Pro (T17). Model fetched from HF.
-    whisper_models_dir: "{{ ansible_env.HOME }}/.cache/whisper/models"
-    whisper_log_dir: "{{ ansible_env.HOME }}/Library/Logs/transcribe"
+    whisper_models_dir: "{{ ansible_facts.env.HOME }}/.cache/whisper/models"
+    whisper_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/transcribe"
     whisper_model_base_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
   pre_tasks:
@@ -37,7 +37,7 @@
           - "Total MAS apps: {{ mas_apps | length }}"
 
     - name: Ensure Rosetta 2 is installed (Apple Silicon only)
-      when: ansible_architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
+      when: ansible_facts.architecture == "arm64" or (cpu_arch.stdout | default('')) == "arm64"
       block:
         - name: Check CPU architecture
           ansible.builtin.command: uname -m
@@ -266,7 +266,7 @@
       ansible.builtin.shell: |
         uid=$(id -u)
         launchctl bootout "gui/${uid}/com.ollama.serve" 2>/dev/null || true
-        launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+        launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
       changed_when: true
 
     # Restart transcribe only when its plist changed AND the model file is
@@ -279,6 +279,6 @@
         model="{{ whisper_models_dir }}/{{ whisper_model_file | default('') }}"
         if [ -n "{{ whisper_model_file | default('') }}" ] && [ -f "$model" ]; then
           launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
-          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
         fi
       changed_when: true

@@ -23,7 +23,7 @@
           - "--role"
           - "{{ inference_role }}"
           - "--models-dir"
-          - "{{ ollama_models_dir | default(ansible_env.HOME + '/.ollama/models') }}"
+          - "{{ ollama_models_dir | default(ansible_facts.env.HOME + '/.ollama/models') }}"
           - "--llamacpp-models-dir"
           - "{{ llamacpp_models_dir }}"
           - "--reserve-floor-gb"

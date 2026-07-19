@@ -49,7 +49,7 @@
         state: directory
         mode: '0755'
       loop:
-        - "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        - "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
         - "{{ whisper_models_dir }}"
         - "{{ whisper_log_dir }}"
 
@@ -65,7 +65,7 @@
     - name: Template the transcribe launchd plist
       ansible.builtin.template:
         src: templates/transcribe.plist.j2
-        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.inference.transcribe.plist"
+        dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.inference.transcribe.plist"
         mode: '0644'
       notify: Restart transcribe
 
@@ -77,7 +77,7 @@
         label="com.inference.transcribe"
         model="{{ whisper_models_dir }}/{{ whisper_model_file }}"
         if [ -f "$model" ] && ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
-          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
           echo bootstrapped
         fi
       register: transcribe_bootstrap

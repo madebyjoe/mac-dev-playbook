@@ -42,14 +42,14 @@
         state: directory
         mode: '0755'
       loop:
-        - "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        - "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
         - "{{ llamacpp_models_dir }}"
         - "{{ llamacpp_log_dir }}"
 
     - name: Template a llama-server plist per model
       ansible.builtin.template:
         src: templates/llamacpp-server.plist.j2
-        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.llamacpp.{{ item.name | regex_replace('[:/]', '_') }}.plist"
+        dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.llamacpp.{{ item.name | regex_replace('[:/]', '_') }}.plist"
         mode: '0644'
       loop: "{{ llamacpp_models }}"
       loop_control:
@@ -66,7 +66,7 @@
       ansible.builtin.shell: |
         uid=$(id -u)
         label="com.llamacpp.{{ item.item.name | regex_replace('[:/]', '_') }}"
-        plist="{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
         launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
         launchctl bootstrap "gui/${uid}" "$plist"
       loop: "{{ llamacpp_plists.results | default([]) }}"
@@ -83,7 +83,7 @@
       ansible.builtin.shell: |
         uid=$(id -u)
         label="com.llamacpp.{{ item.name | regex_replace('[:/]', '_') }}"
-        plist="{{ ansible_env.HOME }}/Library/LaunchAgents/${label}.plist"
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
         if ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
           launchctl bootstrap "gui/${uid}" "$plist"
           echo bootstrapped

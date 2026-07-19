@@ -30,8 +30,8 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}/ollama.log</string>
+    <string>{{ ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') }}/ollama.log</string>
     <key>StandardErrorPath</key>
-    <string>{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}/ollama.err</string>
+    <string>{{ ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') }}/ollama.err</string>
 </dict>
 </plist>

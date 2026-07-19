@@ -11,13 +11,13 @@
   block:
     - name: Ensure LaunchAgents directory exists
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/Library/LaunchAgents"
+        path: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
         state: directory
         mode: '0755'
 
     - name: Ensure Ollama log directory exists
       ansible.builtin.file:
-        path: "{{ ollama_log_dir | default(ansible_env.HOME + '/Library/Logs/ollama') }}"
+        path: "{{ ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') }}"
         state: directory
         mode: '0755'
 
@@ -27,7 +27,7 @@
     - name: Template Ollama launchd plist
       ansible.builtin.template:
         src: templates/ollama.plist.j2
-        dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+        dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
         mode: '0644'
       notify: Restart Ollama
 
@@ -37,7 +37,7 @@
       ansible.builtin.shell: |
         uid=$(id -u)
         if ! launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1; then
-          launchctl bootstrap "gui/${uid}" "{{ ansible_env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
           echo bootstrapped
         fi
       register: ollama_bootstrap
