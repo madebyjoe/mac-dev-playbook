@@ -13,13 +13,37 @@
 - name: Plan and pull inference models
   when: inference_role != ''
   block:
+    # The planner must run ON THE TARGET so it sees the target's `ollama list`,
+    # free disk, and (llamacpp) present files — not the control node's. Stage the
+    # stdlib planner + the manifest to a target work dir so this works under both
+    # connection=local and connection=ssh. check_mode:false so a --check run can
+    # still stage the (harmless, read-only) helpers and show the plan.
+    - name: Ensure the planner work dir exists on the target
+      ansible.builtin.file:
+        path: "{{ inference_workdir }}"
+        state: directory
+        mode: '0755'
+      check_mode: false
+
+    - name: Stage the planner and manifest on the target
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ inference_workdir }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ playbook_dir }}/scripts/plan_model_pulls.py", dest: "plan_model_pulls.py", mode: "0755" }
+        - { src: "{{ model_manifest_path }}", dest: "model_manifest.yml", mode: "0644" }
+      loop_control:
+        label: "{{ item.dest }}"
+      check_mode: false
+
     - name: Run the model-pull planner (non-destructive; JSON to stdout)
       ansible.builtin.command:
         argv:
           - python3
-          - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
+          - "{{ inference_workdir }}/plan_model_pulls.py"
           - "--manifest"
-          - "{{ model_manifest_path }}"
+          - "{{ inference_workdir }}/model_manifest.yml"
           - "--role"
           - "{{ inference_role }}"
           - "--models-dir"
@@ -79,9 +103,9 @@
       ansible.builtin.command:
         argv:
           - python3
-          - "{{ playbook_dir }}/scripts/plan_model_pulls.py"
+          - "{{ inference_workdir }}/plan_model_pulls.py"
           - "--manifest"
-          - "{{ model_manifest_path }}"
+          - "{{ inference_workdir }}/model_manifest.yml"
           - "--role"
           - "{{ inference_role }}"
           - "--llamacpp-models-dir"

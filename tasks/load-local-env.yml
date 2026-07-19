@@ -4,11 +4,17 @@
 # origin — is open). set_fact here OUTRANKS group_vars, which only carry
 # defaults; that is intended. Included from pre_tasks (tag: always) so addresses
 # are available whatever --tags the run uses.
+#
+# The .env and the parser live on the CONTROL node, so the stat and parse are
+# delegated to localhost. That makes this work identically whether the target is
+# connection=local (the control node IS the Mac) or connection=ssh (a remote Mac
+# driven from a control node); the resolved facts are still set on the target.
 
 - name: Check for a local .env
   ansible.builtin.stat:
     path: "{{ playbook_dir }}/.env"
   register: local_env_file
+  delegate_to: localhost
   check_mode: false
 
 - name: Parse .env into a dict (shared stdlib parser)
@@ -19,6 +25,7 @@
       - "--json"
       - "{{ playbook_dir }}/.env"
   register: local_env_raw
+  delegate_to: localhost
   changed_when: false
   check_mode: false
   when: local_env_file.stat.exists

@@ -16,6 +16,9 @@
     # Inference model system (F5/F6.1). Override model_manifest_path to point at a
     # synthetic manifest when testing.
     model_manifest_path: "{{ playbook_dir }}/model_manifest.yml"
+    # Where the planner + manifest are staged ON THE TARGET so they run against
+    # the target's disk/ollama state (works for connection=local and =ssh).
+    inference_workdir: "{{ ansible_facts.env.HOME }}/.cache/mac-dev-playbook"
     llamacpp_models_dir: "{{ ansible_facts.env.HOME }}/.cache/llamacpp/models"
     llamacpp_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/llamacpp"
     # transcribe (whisper-server) service — M1 Pro (T17). Model fetched from HF.

@@ -32,26 +32,31 @@ Some things are not possible to bootstrap remotely on mac os and as such these a
 
 > Note: If some Homebrew commands fail, you might need to agree to Xcode's license or fix some other Brew issue. Run `brew doctor` to see if this is the case.
 
-### Use with a remote Mac
+### Which machine does a run target?
 
-You can use this playbook to manage other Macs as well; the playbook doesn't even need to be run from a Mac at all! If you want to manage a remote Mac, either another Mac on your network, or a hosted Mac like the ones from [MacStadium](https://www.macstadium.com), you just need to make sure you can connect to it with SSH:
+**`--limit` selects which host's *variables* apply; the host's `ansible_connection` decides which *physical machine* runs.** By default every profile is `ansible_connection=local`, so `--limit headless` **runs on the machine you invoke it from** — not on some other box named "headless". This repo is designed to run **locally on each target Mac**. There are two ways to provision a Mac:
 
-  1. (On the Mac you want to connect to:) Go to System Settings > Sharing.
-  2. Enable 'Remote Login'.
-
-> You can also enable remote login on the command line:
->
->     sudo systemsetup -setremotelogin on
-
-Then edit the `inventory` file in this repository. Under the `[headless]` group, comment out the local `mac-headless` line and use the SSH form (there is a commented example in the file):
+**Option A — run on the box itself (default).** SSH into the target Mac, make sure it has this repo checked out with its own `.env` filled in, and run there:
 
 ```
-mac-headless ansible_host=[ip or hostname of mac] ansible_user=[mac ssh username] ansible_connection=ssh
+ssh you@the-mac
+cd mac-dev-playbook
+ansible-playbook main.yml --limit headless --tags ollama,transcribe --ask-become-pass
 ```
 
-It makes sense to do this with the `headless` profile as that was what it was designed for.
+Because you're on the box, `connection=local` is correct and it binds that machine's own addresses.
 
-If you need to supply an SSH password (if you don't use SSH keys), make sure to pass the `--ask-pass` parameter to the `ansible-playbook` command.
+**Option B — drive a remote Mac from a control node (over SSH).** You can run the playbook from one machine (or a non-Mac control node) against another Mac:
+
+  1. On the target Mac: System Settings → Sharing → enable **Remote Login** (or `sudo systemsetup -setremotelogin on`), and set up SSH key access.
+  2. In `inventory`, switch that host to the SSH form:
+     ```
+     [headless]
+     mac-headless ansible_host=[ip or hostname] ansible_user=[ssh user] ansible_connection=ssh
+     ```
+  3. Run from the control node, e.g. `ansible-playbook main.yml --limit headless --tags ollama,transcribe --ask-become-pass`.
+
+Under Option B the split of work is: the **`.env` is read on the control node** (its addresses are pushed to the target as facts); the planner + manifest are **staged to the target** so they run against the target's own disk/`ollama list`; models, services, and plists are created **on the target**; and the emitted LiteLLM snippet lands in **`artifacts/` on the control node** for you to apply on Unraid. `--ask-become-pass` supplies the *remote* sudo password (for the `pmset` task); add `--ask-pass` if you use an SSH password instead of a key.
 
 ### Running a specific set of tagged tasks
 

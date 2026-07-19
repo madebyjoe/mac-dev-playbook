@@ -2,6 +2,11 @@
 # Emit a LiteLLM model_list snippet for this inference node (F8). The playbook
 # only writes the artifact into artifacts/litellm/ (gitignored); the human
 # applies it on the Unraid LiteLLM host. No task ever reaches across to Unraid.
+#
+# The manifest, the linter, and the emitted artifact all live on the CONTROL
+# node, so the lint / dir / render are delegated to localhost. That way, driving
+# a remote Mac still leaves the snippet on the control machine (keyed by the
+# host's own lan_ip, which is available even under delegation), not on the remote.
 
 - name: Resolve this host's inference role
   ansible.builtin.set_fact:
@@ -18,6 +23,7 @@
           - "--manifest"
           - "{{ model_manifest_path }}"
           - "--lint"
+      delegate_to: localhost
       changed_when: false
       check_mode: false
 
@@ -38,9 +44,11 @@
         path: "{{ playbook_dir }}/artifacts/litellm"
         state: directory
         mode: '0755'
+      delegate_to: localhost
 
     - name: Render the LiteLLM model_list snippet
       ansible.builtin.template:
         src: templates/litellm-snippet.yml.j2
         dest: "{{ playbook_dir }}/artifacts/litellm/{{ inventory_hostname }}.yml"
         mode: '0644'
+      delegate_to: localhost
