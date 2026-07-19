@@ -55,10 +55,10 @@ class TestLoadEnv(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, ".env")
             with open(path, "w") as fh:
-                fh.write("# synthetic\nMAC_X_LAN_IP=192.0.2.5\nMAC_X_TAILNET_IP=10.99.0.5\n")
+                fh.write("# synthetic\nMAC_X_LAN_IP=192.0.2.5\nMAC_X_TAILNET_IP=198.51.100.5\n")
             env = local_env.load_env(path)
             self.assertEqual(env["MAC_X_LAN_IP"], "192.0.2.5")
-            self.assertEqual(env["MAC_X_TAILNET_IP"], "10.99.0.5")
+            self.assertEqual(env["MAC_X_TAILNET_IP"], "198.51.100.5")
 
 
 if __name__ == "__main__":
