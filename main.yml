@@ -268,8 +268,15 @@
     - name: Restart Ollama
       ansible.builtin.shell: |
         uid=$(id -u)
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
         launchctl bootout "gui/${uid}/com.ollama.serve" 2>/dev/null || true
-        launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+        # bootout is async; bootstrapping before it finishes returns
+        # "Bootstrap failed: 5: Input/output error". Wait for it to unload first.
+        for _ in $(seq 1 20); do
+          launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1 || break
+          sleep 0.3
+        done
+        launchctl bootstrap "gui/${uid}" "$plist"
       changed_when: true
 
     # Restart transcribe only when its plist changed AND the model file is

@@ -21,6 +21,34 @@
         state: directory
         mode: '0755'
 
+    # Take over from any hand-rolled ollama launchd service (e.g. a com.ollama or
+    # local.ollama plist binding 0.0.0.0 from a manual setup). Every LaunchAgents
+    # *.plist that runs `ollama serve` / sets OLLAMA_HOST, EXCEPT our own
+    # com.ollama.serve, is booted out and renamed aside — otherwise the old one
+    # keeps :11434 and our LAN bind never takes effect (and bootstrap fails).
+    # Renamed to .disabled-by-playbook (not deleted) so it is recoverable; see
+    # runbooks/ollama.md. Skipped under --check (it mutates launchd/files).
+    - name: Disable conflicting legacy ollama launchd services
+      ansible.builtin.shell: |
+        set -o pipefail
+        uid=$(id -u)
+        la="{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
+        changed=0
+        for f in "$la"/*.plist; do
+          [ -e "$f" ] || continue
+          [ "$(basename "$f")" = "com.ollama.serve.plist" ] && continue
+          if grep -qi 'ollama' "$f" && grep -qiE '>serve<|OLLAMA_HOST' "$f"; then
+            label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$f" 2>/dev/null || true)
+            [ -n "$label" ] && launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+            mv "$f" "${f}.disabled-by-playbook"
+            echo "disabled $(basename "$f") (label=${label:-unknown})"
+            changed=1
+          fi
+        done
+        [ "$changed" = 1 ] && echo RESULT_CHANGED || true
+      register: ollama_legacy
+      changed_when: "'RESULT_CHANGED' in ollama_legacy.stdout"
+
     # Templating the plist only NOTIFIES the restart handler. The service is
     # bounced (bootout + bootstrap, dropping resident models) exclusively when
     # the rendered plist actually changes -- not on every run (F7).

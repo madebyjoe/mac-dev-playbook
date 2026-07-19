@@ -54,10 +54,23 @@ grep -iE 'mlx|ggml|metal' ~/Library/Logs/ollama/ollama.log | tail -20
 > `medium` jobs to llama.cpp instead (F6.1, pending T14) — see
 > `runbooks/model-management.md`.
 
+## Taking over from a hand-rolled ollama service
+
+If the machine already ran ollama from a manually-created launchd service (e.g. a
+`com.ollama` or `local.ollama` plist binding `0.0.0.0`, or `brew services start
+ollama`), the playbook **disables it** so `com.ollama.serve` can own `:11434` —
+otherwise the old service keeps the port and the LAN bind never takes effect.
+Each conflicting `~/Library/LaunchAgents/*.plist` (any that runs `ollama serve` /
+sets `OLLAMA_HOST`, except `com.ollama.serve.plist`) is booted out and **renamed
+to `*.plist.disabled-by-playbook`** — not deleted. To restore one, rename it back
+and `bootstrap` it (and bootout `com.ollama.serve` first if you want the old one
+to own the port). The menu-bar **Ollama.app** is not a LaunchAgent and is not
+touched — quit it manually if it is also serving `:11434`.
+
 ## Rollback
 
 See `docs/rollback-notes.md` (T7). In short: `launchctl bootout` the new label,
-remove `com.ollama.serve.plist`, `git revert` the T7 commit to restore the old
-`com.ollama` plist, then re-render and `bootstrap` it. The `pmset -c sleep 0`
-change on inference nodes is not auto-reverted — restore with
+remove `com.ollama.serve.plist`, restore any `*.disabled-by-playbook` you want
+back, `git revert` the T7 commit, then re-render and `bootstrap`. The `pmset -c
+sleep 0` change on inference nodes is not auto-reverted — restore with
 `sudo pmset -c sleep <minutes>`.
