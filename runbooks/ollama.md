@@ -32,6 +32,31 @@ curl -s http://127.0.0.1:11434/api/tags        # loopback host
 tail -f ~/Library/Logs/ollama/ollama.log
 ```
 
+## Using ollama locally on a role node
+
+An inference-role host binds **`<lan_ip>:11434` only** (G30), **not** `127.0.0.1`.
+So on that box the `ollama` CLI and the menu-bar **Ollama.app** — which default to
+`127.0.0.1:11434` — will look like "ollama isn't running." It is; it's just on the
+LAN IP. This is expected, not a failure (the provisioning run prints where it is
+serving).
+
+```sh
+# point the CLI at the LAN bind (add to ~/.zshrc for every new shell)
+export OLLAMA_HOST=<lan_ip>:11434
+ollama list
+
+# one-off without exporting:
+OLLAMA_HOST=<lan_ip>:11434 ollama list
+
+# health check (works from this box or the Unraid router over the LAN):
+curl -s http://<lan_ip>:11434/api/tags
+```
+
+The menu-bar **Ollama.app** cannot be pointed at a non-loopback server; quit it on
+a dedicated backend (`osascript -e 'quit app "Ollama"'`). If you need loopback and
+LAN both, that host should not be a role node (bind stays loopback, F2) — or accept
+`0.0.0.0` as an explicit per-host exception.
+
 ## Apple Silicon backend: MLX vs GGML (Amendment 1 A4.5)
 
 As of Ollama 0.19 the Apple Silicon backend is **MLX**, which is why the manifest

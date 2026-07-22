@@ -71,6 +71,32 @@
       register: ollama_bootstrap
       changed_when: "'bootstrapped' in ollama_bootstrap.stdout"
 
+    # Positive confirmation that ollama actually came up on its bind address, so a
+    # run does not just "mostly pass" while the service is unreachable. Retries
+    # absorb async startup; a real failure to serve fails the run loudly (F9).
+    - name: Wait for Ollama to answer on its bind address
+      ansible.builtin.uri:
+        url: "http://{{ (ollama_bind | default('127.0.0.1:11434')).split(':')[0] }}:11434/api/tags"
+        status_code: 200
+      register: ollama_ready
+      retries: 15
+      delay: 2
+      until: ollama_ready.status == 200
+      when: not ansible_check_mode
+
+    # A role node binds the LAN IP only (G30), so 127.0.0.1 / the CLI / the
+    # menu-bar app cannot reach it. Say so plainly so the run is self-explanatory.
+    - name: Report where Ollama is serving
+      ansible.builtin.debug:
+        msg:
+          - "Ollama is serving on {{ ollama_bind | default('127.0.0.1:11434') }}"
+          - "This is an inference-role node: it binds the LAN IP only (G30), NOT 127.0.0.1."
+          - "Local CLI on this box: export OLLAMA_HOST={{ ollama_bind | default('127.0.0.1:11434') }}"
+          - "The menu-bar Ollama.app defaults to 127.0.0.1 and will NOT reach it."
+      when: >-
+        ('inference_small' in group_names) or
+        ('inference_medium' in group_names)
+
     # Inference nodes must not sleep on AC or they drop off the tailnet. Applied
     # only to hosts in an inference-role group (F4); requires root.
     - name: Prevent system sleep on AC power (inference nodes only)
