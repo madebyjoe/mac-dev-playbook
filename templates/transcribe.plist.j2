@@ -16,7 +16,21 @@
         <string>{{ lan_ip | default('127.0.0.1') }}</string>
         <string>--port</string>
         <string>{{ transcribe_port }}</string>
+        <!-- T17 r4 / F16: serve the OpenAI path so the router's openai/ mapping
+             reaches this backend without a router rewrite. -->
+        <string>--inference-path</string>
+        <string>/v1/audio/transcriptions</string>
+        <!-- T17 r4 / F17: server-side conversion (ffmpeg) — the alias is
+             format-agnostic for all callers (Brief 9 m4a input verified). -->
+        <string>--convert</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- T17 r4: launchd's default PATH cannot see /opt/homebrew/bin; without
+             this, --convert cannot find ffmpeg and fails silently. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

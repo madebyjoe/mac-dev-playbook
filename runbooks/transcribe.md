@@ -16,7 +16,11 @@ honoring `model_pull_dry_run` (no separate flag); the planner itself skips
 `engine: whisper` for pulls. The service is only (re)started once the model file
 exists, so a dry/check run just renders the plist. Logs are in
 `~/Library/Logs/transcribe/transcribe.{log,err}`. It is configured only on an
-`inference_small` host (work guard applies).
+`inference_small` host (work guard applies). It serves the OpenAI-shaped path
+`/v1/audio/transcriptions` (via `--inference-path`) so the router's `openai/`
+mapping reaches it without a rewrite, and converts non-WAV input server-side (via
+`--convert` + ffmpeg on the launchd `PATH`), making the alias format-agnostic for
+every caller — Brief 9's iOS Voice Memos m4a included (T17 r4, F16/F17).
 
 ## Commands
 
@@ -31,8 +35,8 @@ launchctl kickstart -k "gui/${uid}/${label}"                               # res
 launchctl bootout   "gui/${uid}/${label}"                                  # stop
 launchctl bootstrap "gui/${uid}" ~/Library/LaunchAgents/${label}.plist     # start
 
-# Verify and tail logs (LAN IP from .env; :8082)
-curl -s http://<lan_ip>:8082/models
+# Verify the canonical endpoint (LAN IP from .env; :8082) — expects {"text": ...}
+curl -s http://<lan_ip>:8082/v1/audio/transcriptions -F file=@test.wav -F model=whisper-large-v3-turbo
 tail -f ~/Library/Logs/transcribe/transcribe.log
 ```
 

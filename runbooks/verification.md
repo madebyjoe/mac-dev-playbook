@@ -27,6 +27,14 @@ server answers with any HTTP status; it **FAILS** on connection refused/timeout.
 Exit is non-zero on any unexpected state, including under `--expect-down` (up when
 it should be down → FAIL).
 
+For a **functional** transcribe check (beyond liveness), POST synthetic audio to
+the canonical endpoint (`--inference-path`, T17 r4) — a real transcript back
+proves the OpenAI path + server-side conversion, not just reachability:
+
+```sh
+curl -s http://<m1pro_lan_ip>:8082/v1/audio/transcriptions -F file=@test.wav -F model=whisper-large-v3-turbo
+```
+
 ## Alias layer — router-side `smoke-test.sh` (cross-reference)
 
 > **Reconcile first (parallel-track P5).** The router package's `config.yaml` was
