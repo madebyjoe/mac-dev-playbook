@@ -1,9 +1,29 @@
+{#- ONE template, TWO instances (T18 / Fault B). The caller passes per-instance
+    vars; everything below is shared launchd hygiene:
+      * PIPELINE instance — com.ollama.serve on :11434. Only ever holds the
+        alias-serving models (`small` + `embed`). Slot budget sized for exactly
+        those, keep-alive -1 so they never unload on a timer.
+      * DEV instance — com.ollama.dev on :11435 (optional, ollama_dev_enabled).
+        The ad-hoc `dev/*` zoo lives here with its OWN slot budget and a FINITE
+        keep-alive, so experimentation can never evict a pipeline model.
+    Every OLLAMA_* variable is set HERE, in the plist's EnvironmentVariables.
+    NEVER via `launchctl setenv`: that does not survive a reboot and does not
+    reliably reach a launchd-started daemon, which is how the box ended up with
+    OLLAMA_KEEP_ALIVE set but OLLAMA_MAX_LOADED_MODELS unset. One managed
+    template means the two cannot diverge again. -#}
+{%- set _label = ollama_label | default('com.ollama.serve') -%}
+{%- set _bind = ollama_instance_bind | default(ollama_bind | default('127.0.0.1:11434', true), true) -%}
+{%- set _keep_alive = ollama_instance_keep_alive | default(ollama_keep_alive | default('', true), true) -%}
+{%- set _max_loaded = ollama_instance_max_loaded | default(ollama_max_loaded_models | default('', true), true) -%}
+{%- set _models_dir = ollama_instance_models_dir | default(ollama_models_dir | default('', true), true) -%}
+{%- set _log_name = ollama_instance_log_name | default('ollama') -%}
+{%- set _log_dir = ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') -%}
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ollama.serve</string>
+    <string>{{ _label }}</string>
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/ollama</string>
@@ -11,27 +31,43 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Loopback by default. A non-loopback bind exposes an UNAUTHENTICATED
+             inference API on that interface (ollama has no auth of its own). Only
+             inference-role group_vars set a non-loopback bind, and the value is
+             the host's LAN IP so LiteLLM on Unraid reaches the backend over the
+             LAN -- never 0.0.0.0. The VLAN is a backstop, not the access control. -->
         <key>OLLAMA_HOST</key>
-        {#- Loopback by default. A non-loopback bind exposes an UNAUTHENTICATED
-            inference API on that interface (ollama has no auth of its own). Only
-            inference-role group_vars set a non-loopback `ollama_bind`, and the
-            preferred value is the host's Tailscale interface IP so LiteLLM on
-            Unraid reaches the backend over the tailnet -- never 0.0.0.0. The
-            work VLAN is a backstop, not the access control. -#}
-        <string>{{ ollama_bind | default('127.0.0.1:11434') }}</string>
-{% if ollama_keep_alive is defined %}
-        {#- Inference-role hosts pin the model resident (-1) for G19 latency. -#}
+        <string>{{ _bind }}</string>
+{%- if _keep_alive not in ['', None] %}
+        <!-- -1 pins a model against the IDLE TIMER only. It is NOT protection: at
+             the slot cap ollama still evicts the least-recently-used model
+             regardless of keep-alive. That is why the slot budget below, and the
+             dev/pipeline split, do the actual work. -->
         <key>OLLAMA_KEEP_ALIVE</key>
-        <string>{{ ollama_keep_alive }}</string>
-{% endif %}
+        <string>{{ _keep_alive }}</string>
+{%- endif %}
+{%- if _max_loaded not in ['', None] %}
+        <!-- Concurrent model slots. Sized from real RAM arithmetic in the
+             inference-role group_vars -- NOT left at ollama's default, and never
+             raised without the unified memory to back it (an over-subscribed cap
+             surfaces as "Compute error." 500s from the Metal allocator). -->
+        <key>OLLAMA_MAX_LOADED_MODELS</key>
+        <string>{{ _max_loaded }}</string>
+{%- endif %}
+{%- if _models_dir not in ['', None] %}
+        <!-- Both instances share this store by default: a model is downloaded
+             once, only residency is partitioned. -->
+        <key>OLLAMA_MODELS</key>
+        <string>{{ _models_dir }}</string>
+{%- endif %}
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{{ ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') }}/ollama.log</string>
+    <string>{{ _log_dir }}/{{ _log_name }}.log</string>
     <key>StandardErrorPath</key>
-    <string>{{ ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') }}/ollama.err</string>
+    <string>{{ _log_dir }}/{{ _log_name }}.err</string>
 </dict>
 </plist>

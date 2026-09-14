@@ -107,6 +107,53 @@ and the CI workflow (and would reintroduce the lint findings the commit fixed);
   never deleted by any code path. `embed` needs no rollback — it is just the
   ollama instance.
 
+## M1 Pro remediation (2026-09-12) — transcribe path + model-slot thrashing
+
+Two faults, both diagnosed against the live router and fixed here so they survive
+a reboot and a rebuild. Full write-ups: `runbooks/ollama.md` and
+`runbooks/transcribe.md`.
+
+**Repo-only parts** (revert restores prior behaviour, no machine state): the
+`tier` field and `ports.ollama_dev` in `model_manifest.yml`, the planner's
+`-cloud`/tier lints, the slot-budget and dev-instance group_vars, the `OLLAMA_HOST`
+environment on the pull tasks, the `--threads`/ffmpeg additions to the transcribe
+role, and the router-snippet dev-namespace routing. Reverting the snippet change
+does not touch the router — `artifacts/` is never applied by this repo.
+
+**External state.** Three things outlive a `git revert`:
+
+1. **New launchd labels.** `com.ollama.dev` (:11435) and `com.ollama.warm`
+   (periodic warm-keeper). Remove both:
+
+   ```sh
+   uid=$(id -u)
+   for l in com.ollama.warm com.ollama.dev; do
+     launchctl bootout "gui/${uid}/$l" 2>/dev/null || true
+     rm -f ~/Library/LaunchAgents/$l.plist
+   done
+   rm -f ~/.cache/mac-dev-playbook/ollama-warm.sh
+   ```
+
+   Setting `ollama_dev_enabled: false` achieves the same on the next run (the task
+   boots out the dev instance and deletes its plist). **Before doing either,
+   re-read why the split exists** — a single instance means the `dev/*` zoo shares
+   the pipeline's slot budget again, which is the original fault.
+
+2. **Disabled legacy plists.** The transcribe role now takes over hand-rolled
+   whisper LaunchAgents the same way the ollama role already did: any
+   `~/Library/LaunchAgents/*.plist` mentioning whisper or serving `/inference`
+   (except `com.inference.transcribe.plist`) is booted out and renamed to
+   `*.plist.disabled-by-playbook`. **Nothing is deleted.** To restore one, rename
+   it back and `bootstrap` it — booting out `com.inference.transcribe` first if you
+   want the old service to own `:8082`.
+
+3. **Router config.** Repointing `dev/*` entries at `:11435` is a human edit on
+   Unraid; this repo only emits the snippet. If you revert the split, those entries
+   must go back to `:11434` by hand or they will 404.
+
+No models are deleted by any path here, and the residency assertion is a read of
+`/api/ps` — bypass it with `-e skip_residency_check=true` if it is in your way.
+
 ## Phase 3b — llama.cpp engine (T14, Amendment 1)
 
 Additive and non-destructive, like the rest of the model system. `git revert`

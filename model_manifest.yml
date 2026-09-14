@@ -20,7 +20,26 @@
 #               which tasks/litellm-artifact.yml runs before rendering. The
 #               snippet emits a bare `model_name: <alias>` block for it in
 #               addition to the role-namespaced entry.
+#   tier      — (schema v1.2, M1 Pro remediation 2026-09-12) RESIDENCY class.
+#               pipeline — backs a production alias; must stay resident on the
+#                          PIPELINE ollama instance (:11434). Warm-kept and
+#                          asserted against /api/ps by configure-ollama.yml.
+#               standby  — on disk for failover (e.g. embed-fallback), NOT pinned:
+#                          pinning it would spend a slot the pipeline needs.
+#               dev      — the ad-hoc experimentation zoo. Served by the DEV
+#                          ollama instance (:11435) where one exists, so it can
+#                          never evict a pipeline model. NOT interchangeable with
+#                          pipeline entries — that separation IS the fix for the
+#                          model-slot thrashing that made `small` 16–76s and
+#                          `embed` intermittently 500.
+#               Missing tier is treated as `dev` (never pinned) by the playbook.
 #   notes     — RAM caveats, alias mapping, verify flags
+#
+# NO `-cloud` TAG MAY EVER APPEAR IN THIS FILE. Those tags transparently proxy
+# inference off-LAN and defeat the entire architecture; one typo would do it.
+# `plan_model_pulls.py --lint` rejects them and tasks/pull-models.yml asserts it
+# again before pulling. For the same reason `ollama signin` must never be run on
+# an inference host.
 #
 # PRIORITIES ARE A PROPOSAL — reorder to taste before ratifying G25.
 # RAM note: the planner is disk-aware, not RAM-aware. Role assignment is the RAM
@@ -33,50 +52,58 @@
 # entry's `port` field. The planner --lint / port-collision checks read this.
 ports:
   transcribe: 8082   # whisper-server on the M1 Pro (T17)
+  # Second ollama instance -- the "dev zoo" (M1 Pro remediation, Fault B). The
+  # pipeline instance keeps :11434 and holds ONLY the alias-serving models; every
+  # `tier: dev` entry is served here instead, with its own slot budget, so ad-hoc
+  # experimentation can never evict `small` or `embed`. Keep this in sync with
+  # `ollama_dev_port` in group_vars/inference_small.yml -- configure-ollama.yml
+  # asserts the two agree. scripts/probe_backends.py probes this port for any
+  # role that has dev-tier entries.
+  ollama_dev: 11435
 
 models:
 
   # ── small role — M1 Pro (32GB) ────────────────────────────────────────────
-  - { name: "qwen3.5:0.8b-mlx",        engine: ollama, size_gb: 1.2,  role: small,  priority: 10, notes: "Verified. Tagging/extraction tier." }
-  - { name: "qwen3.5:2b-mlx",          engine: ollama, size_gb: 3.1,  role: small,  priority: 20, notes: "Verified." }
-  - { name: "qwen3.5:4b-mlx",          engine: ollama, size_gb: 4.2,  role: small,  priority: 30, notes: "Estimate — verify (GGUF is 3.4GB; MLX runs slightly larger)." }
-  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, serves_alias: small, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias (serves_alias, confirm at review)." }
-  - { name: "gemma4:e2b-mlx",          engine: ollama, size_gb: 7.2,  role: small,  priority: 50, notes: "GGUF size verified at 7.2GB; confirm MLX tag size on first pull." }
-  - { name: "gemma4:e4b-mlx",          engine: ollama, size_gb: 9.6,  role: small,  priority: 60, notes: "GGUF size verified; confirm MLX tag. Strong small-tier generalist w/ vision+audio." }
-  - { name: "ornith:9b",               engine: ollama, size_gb: 5.6,  role: small,  priority: 70, notes: "Verified. Agentic coding, Qwen3.5 base, MIT." }
-  - { name: "glm-ocr:latest",          engine: ollama, size_gb: 1.0,  role: small,  priority: 80, notes: "Estimate — 0.9B params; verify. Paperless/doc OCR assist." }
-  - { name: "translategemma:4b",       engine: ollama, size_gb: 3.3,  role: small,  priority: 90, notes: "Estimate — Gemma3-based; verify." }
+  - { name: "qwen3.5:0.8b-mlx",        engine: ollama, size_gb: 1.2,  role: small,  priority: 10, tier: dev, notes: "Verified. Tagging/extraction tier." }
+  - { name: "qwen3.5:2b-mlx",          engine: ollama, size_gb: 3.1,  role: small,  priority: 20, tier: dev, notes: "Verified." }
+  - { name: "qwen3.5:4b-mlx",          engine: ollama, size_gb: 4.2,  role: small,  priority: 30, tier: dev, notes: "Estimate — verify (GGUF is 3.4GB; MLX runs slightly larger)." }
+  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, serves_alias: small, tier: pipeline, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias (serves_alias, confirm at review)." }
+  - { name: "gemma4:e2b-mlx",          engine: ollama, size_gb: 7.2,  role: small,  priority: 50, tier: dev, notes: "GGUF size verified at 7.2GB; confirm MLX tag size on first pull." }
+  - { name: "gemma4:e4b-mlx",          engine: ollama, size_gb: 9.6,  role: small,  priority: 60, tier: dev, notes: "GGUF size verified; confirm MLX tag. Strong small-tier generalist w/ vision+audio." }
+  - { name: "ornith:9b",               engine: ollama, size_gb: 5.6,  role: small,  priority: 70, tier: dev, notes: "Verified. Agentic coding, Qwen3.5 base, MIT." }
+  - { name: "glm-ocr:latest",          engine: ollama, size_gb: 1.0,  role: small,  priority: 80, tier: dev, notes: "Estimate — 0.9B params; verify. Paperless/doc OCR assist." }
+  - { name: "translategemma:4b",       engine: ollama, size_gb: 3.3,  role: small,  priority: 90, tier: dev, notes: "Estimate — Gemma3-based; verify." }
 
   # embeddings — small role; `embed` alias is a SCHEMA decision (changing the
   # backing model invalidates all downstream vectors — see LiteLLM standing note)
-  - { name: "embeddinggemma:latest",   engine: ollama, size_gb: 0.6,  role: small,  priority: 100, notes: "Estimate — verify." }
-  - { name: "qwen3-embedding:0.6b",    engine: ollama, size_gb: 0.7,  role: small,  priority: 110, serves_alias: embed-fallback, notes: "STRICT fallback for the `embed` alias (human pick). Wire router_settings.fallbacks {embed: [embed-fallback]} on the router (F8). CAVEAT: 0.6b's native dimension (1024) differs from 4b's (2560); this is availability insurance, NOT a transparent swap — if it ever serves an index long-term, re-index. HUMAN: pin digest + record dimension before use." }
-  - { name: "qwen3-embedding:4b",      engine: ollama, size_gb: 2.6,  role: small,  priority: 120, serves_alias: embed, notes: "PRIMARY `embed` alias via ollama :11434 (F13 r3; no standalone embed server). Non-floating tag. Fallback is qwen3-embedding:0.6b (alias embed-fallback). HUMAN: pin the exact ollama digest and record the embedding DIMENSION here before Brief 3's first index run — digest=TODO dimension=TODO. Changing the backing embed model after first index is out of scope." }
-  - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, notes: "Estimate — verify. Available as small/qwen3-embedding:8b; not the embed alias (4b is)." }
+  - { name: "embeddinggemma:latest",   engine: ollama, size_gb: 0.6,  role: small,  priority: 100, tier: dev, notes: "Estimate — verify." }
+  - { name: "qwen3-embedding:0.6b",    engine: ollama, size_gb: 0.7,  role: small,  priority: 110, serves_alias: embed-fallback, tier: standby, notes: "STRICT fallback for the `embed` alias (human pick). Wire router_settings.fallbacks {embed: [embed-fallback]} on the router (F8). CAVEAT: 0.6b's native dimension (1024) differs from 4b's (2560); this is availability insurance, NOT a transparent swap — if it ever serves an index long-term, re-index. HUMAN: pin digest + record dimension before use." }
+  - { name: "qwen3-embedding:4b",      engine: ollama, size_gb: 2.6,  role: small,  priority: 120, serves_alias: embed, tier: pipeline, notes: "PRIMARY `embed` alias via ollama :11434 (F13 r3; no standalone embed server). Non-floating tag. Fallback is qwen3-embedding:0.6b (alias embed-fallback). HUMAN: pin the exact ollama digest and record the embedding DIMENSION here before Brief 3's first index run — digest=TODO dimension=TODO. Changing the backing embed model after first index is out of scope." }
+  - { name: "qwen3-embedding:8b",      engine: ollama, size_gb: 4.7,  role: small,  priority: 130, tier: dev, notes: "Estimate — verify. Available as small/qwen3-embedding:8b; not the embed alias (4b is)." }
 
   # ── medium role — M4 Pro (48GB) ───────────────────────────────────────────
-  - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, serves_alias: medium, notes: "Verified 20GB. Dense 27B; primary `medium` alias (serves_alias, confirm at review)." }
-  - { name: "qwen3.6:35b-mlx",         engine: ollama, size_gb: 22,   role: medium, priority: 20, notes: "Verified 22GB. 35B-A3B MoE — faster than the 27B dense at similar quality." }
-  - { name: "glm-4.7-flash:latest",    engine: ollama, size_gb: 19,   role: medium, priority: 30, notes: "Verified. 30B-A3B MoE, MIT; requires Ollama >=0.14.3." }
-  - { name: "qwen3-coder:latest",      engine: ollama, size_gb: 19,   role: medium, priority: 40, notes: "Estimate — verify current :latest mapping (30B-A3B Q4 ~= 19GB)." }
-  - { name: "gemma4:26b-mlx",          engine: ollama, size_gb: 18,   role: medium, priority: 50, notes: "GGUF verified ~18GB; confirm MLX tag. MoE, 4B active." }
-  - { name: "gemma4:31b-mlx",          engine: ollama, size_gb: 20,   role: medium, priority: 60, notes: "GGUF verified ~20GB; confirm MLX tag. Dense — strongest Gemma tier." }
-  - { name: "gemma4:12b-mlx",          engine: ollama, size_gb: 9.0,  role: medium, priority: 70, notes: "Estimate — verify. 12B Unified adds AUDIO input (June 2026) — relevant to voice/media briefs." }
-  - { name: "ornith:35b",              engine: ollama, size_gb: 21,   role: medium, priority: 80, notes: "Verified. 35B MoE coding agent." }
-  - { name: "nemotron3:33b",           engine: ollama, size_gb: 28,   role: medium, priority: 90, notes: "Verified 28GB — LARGEST entry; tight on 48GB with long context. Omni: video+audio+image+OCR+transcription." }
-  - { name: "translategemma:12b",      engine: ollama, size_gb: 8.1,  role: medium, priority: 100, notes: "Estimate — verify." }
-  - { name: "translategemma:27b",      engine: ollama, size_gb: 17,   role: medium, priority: 110, notes: "Estimate — verify. Consider skipping if 12b quality suffices — 17GB for translation is steep." }
+  - { name: "qwen3.6:27b-mlx",         engine: ollama, size_gb: 20,   role: medium, priority: 10, serves_alias: medium, tier: pipeline, notes: "Verified 20GB. Dense 27B; primary `medium` alias (serves_alias, confirm at review)." }
+  - { name: "qwen3.6:35b-mlx",         engine: ollama, size_gb: 22,   role: medium, priority: 20, tier: dev, notes: "Verified 22GB. 35B-A3B MoE — faster than the 27B dense at similar quality." }
+  - { name: "glm-4.7-flash:latest",    engine: ollama, size_gb: 19,   role: medium, priority: 30, tier: dev, notes: "Verified. 30B-A3B MoE, MIT; requires Ollama >=0.14.3." }
+  - { name: "qwen3-coder:latest",      engine: ollama, size_gb: 19,   role: medium, priority: 40, tier: dev, notes: "Estimate — verify current :latest mapping (30B-A3B Q4 ~= 19GB)." }
+  - { name: "gemma4:26b-mlx",          engine: ollama, size_gb: 18,   role: medium, priority: 50, tier: dev, notes: "GGUF verified ~18GB; confirm MLX tag. MoE, 4B active." }
+  - { name: "gemma4:31b-mlx",          engine: ollama, size_gb: 20,   role: medium, priority: 60, tier: dev, notes: "GGUF verified ~20GB; confirm MLX tag. Dense — strongest Gemma tier." }
+  - { name: "gemma4:12b-mlx",          engine: ollama, size_gb: 9.0,  role: medium, priority: 70, tier: dev, notes: "Estimate — verify. 12B Unified adds AUDIO input (June 2026) — relevant to voice/media briefs." }
+  - { name: "ornith:35b",              engine: ollama, size_gb: 21,   role: medium, priority: 80, tier: dev, notes: "Verified. 35B MoE coding agent." }
+  - { name: "nemotron3:33b",           engine: ollama, size_gb: 28,   role: medium, priority: 90, tier: dev, notes: "Verified 28GB — LARGEST entry; tight on 48GB with long context. Omni: video+audio+image+OCR+transcription." }
+  - { name: "translategemma:12b",      engine: ollama, size_gb: 8.1,  role: medium, priority: 100, tier: dev, notes: "Estimate — verify." }
+  - { name: "translategemma:27b",      engine: ollama, size_gb: 17,   role: medium, priority: 110, tier: dev, notes: "Estimate — verify. Consider skipping if 12b quality suffices — 17GB for translation is steep." }
 
   # ── unfiltered classification/captioning — medium role, M4 Pro ONLY ───────
   # These process the sensitive media corpus (Brief 4). Router enforcement:
   # dedicated alias (proposed: `caption-unfiltered`) with virtual-key allow-list;
   # Hermes and all non-sensitive-tagged pipelines must NOT be able to reach it.
-  - { name: "huihui_ai/Qwen3.6-abliterated:27b", engine: ollama, size_gb: 17, role: medium, priority: 120, notes: "Verified 17GB. TEXT-only abliterated — for classifying captions/descriptions without refusals." }
-  - { name: "prithivMLmods/Qwen3-VL-8B-Abliterated-Caption-it", engine: ollama, size_gb: 9.0, role: medium, priority: 130, notes: "G25 pick (Amendment 1 A1): engine=ollama per human decision. Upstream is an HF distribution — confirm an Ollama pull route resolves this tag on first pull, else revisit the llamacpp/mlx_hf route. Size estimate — verify. Uncensored VISION captioner for flagged media. Fallback if flaky: JoyCaption-class fine-tune." }
+  - { name: "huihui_ai/Qwen3.6-abliterated:27b", engine: ollama, size_gb: 17, role: medium, priority: 120, tier: dev, notes: "Verified 17GB. TEXT-only abliterated — for classifying captions/descriptions without refusals." }
+  - { name: "prithivMLmods/Qwen3-VL-8B-Abliterated-Caption-it", engine: ollama, size_gb: 9.0, role: medium, priority: 130, tier: dev, notes: "G25 pick (Amendment 1 A1): engine=ollama per human decision. Upstream is an HF distribution — confirm an Ollama pull route resolves this tag on first pull, else revisit the llamacpp/mlx_hf route. Size estimate — verify. Uncensored VISION captioner for flagged media. Fallback if flaky: JoyCaption-class fine-tune." }
 
   # ── transcription — non-ollama engines, listed for completeness (skipped by v1 planner) ──
-  - { name: "whisper-large-v3-turbo",  engine: whisper, size_gb: 1.6, role: small,  priority: 10, port: 8082, serves_alias: transcribe, notes: "Backs the `transcribe` alias (Brief 9 FIXED). Built as whisper-server (whisper-cpp) on the M1 Pro, launchd, bind lan_ip:8082 (T17, F13 r3). Planner skips engine:whisper for pulls; the GGML model is fetched by the transcribe task honoring model_pull_dry_run." }
-  - { name: "parakeet-tdt-0.6b-v3",    engine: mlx_hf,  size_gb: 0.7, role: small,  priority: 20, notes: "G19 latency option for the voice path only: ~6% WER, no silence hallucination, EN + 25 EU languages. Runs via MLX/FluidAudio on Apple Neural Engine. Evaluate in Brief 12 pilot; do not replace `transcribe` default without a measured reason." }
+  - { name: "whisper-large-v3-turbo",  engine: whisper, size_gb: 1.6, role: small,  priority: 10, port: 8082, serves_alias: transcribe, tier: pipeline, notes: "Backs the `transcribe` alias (Brief 9 FIXED). Built as whisper-server (whisper-cpp) on the M1 Pro, launchd, bind lan_ip:8082 (T17, F13 r3). Planner skips engine:whisper for pulls; the GGML model is fetched by the transcribe task honoring model_pull_dry_run." }
+  - { name: "parakeet-tdt-0.6b-v3",    engine: mlx_hf,  size_gb: 0.7, role: small,  priority: 20, tier: dev, notes: "G19 latency option for the voice path only: ~6% WER, no silence hallucination, EN + 25 EU languages. Runs via MLX/FluidAudio on Apple Neural Engine. Evaluate in Brief 12 pilot; do not replace `transcribe` default without a measured reason." }
 
 # ── deterministic pre-filter (not a model-manifest entry; recorded so it isn't lost) ──
 # NudeNet (Python lib): stage-1 NSFW gating for the Brief 4 media pipeline.

@@ -1,10 +1,32 @@
 ---
+# Ollama launchd service(s).
+#
+# Fault B (M1 Pro remediation, 2026-09-12): the pipeline aliases `small` and
+# `embed` were being evicted by an ad-hoc `dev/*` model zoo sharing the same
+# ollama instance and the same slot budget. OLLAMA_KEEP_ALIVE=-1 does NOT protect
+# a model — at the slot cap ollama evicts the least-recently-used one regardless
+# — and pipeline traffic is bursty while a human experimenting is continuous, so
+# the pipeline models were always the victims. The remediation is three-part and
+# all of it lives here:
+#   1. SPLIT   — an optional second "dev" instance on :11435 with its own slot
+#                budget and a FINITE keep-alive, so the pipeline instance only
+#                ever holds `small` + `embed` (ollama_dev_enabled).
+#   2. BUDGET  — OLLAMA_MAX_LOADED_MODELS set from real RAM arithmetic in the
+#                inference-role group_vars, in the plist's EnvironmentVariables
+#                (never `launchctl setenv`, which does not survive a reboot).
+#   3. WARM    — a periodic warm-keeper so a pinned model is never the LRU victim.
+# Then the invariant is ASSERTED against /api/ps rather than trusted.
+
 - name: Check if Ollama is installed
   ansible.builtin.command: which ollama
   register: ollama_check
   failed_when: false
   changed_when: false
   check_mode: false  # read-only probe; must run under --check so the block gates correctly
+
+- name: Resolve this host's inference role
+  ansible.builtin.set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
 
 - name: Configure Ollama launchd service
   when: ollama_check.rc == 0
@@ -21,10 +43,52 @@
         state: directory
         mode: '0755'
 
+    # The manifest is loaded up front (not just before the residency check) so the
+    # dev-port drift assert below can run BEFORE a plist is rendered from a stale
+    # value.
+    - name: Read the manifest and derive the pinned pipeline set
+      when: inference_role != ''
+      block:
+        - name: Load the model manifest
+          ansible.builtin.include_vars:
+            file: "{{ model_manifest_path }}"
+            name: manifest
+
+        # DECLARATIVE and SEPARATE from the dev zoo, by design: `tier: pipeline`
+        # marks the alias-serving models that must stay resident. Everything else
+        # in the manifest is `tier: dev` (or `standby`) and is explicitly NOT
+        # interchangeable with these — that distinction is the whole fix.
+        - name: Select the pinned pipeline models for this role
+          ansible.builtin.set_fact:
+            ollama_pinned_models: >-
+              {{ manifest.models
+                 | selectattr('engine', 'equalto', 'ollama')
+                 | selectattr('role', 'in', [inference_role, 'either'])
+                 | selectattr('tier', 'defined')
+                 | selectattr('tier', 'equalto', 'pipeline')
+                 | list }}
+
+        # Two files name the dev port: this host's group_vars (what the service
+        # binds) and the manifest ports: registry (what probe_backends.py checks).
+        # If they drift, the probe silently reports a healthy port that nothing is
+        # serving — so make the drift fail the run instead.
+        - name: Assert the dev-instance port matches the manifest ports registry
+          ansible.builtin.assert:
+            that:
+              - (manifest.ports | default({})).ollama_dev is defined
+              - (manifest.ports.ollama_dev | int) == (ollama_dev_port | int)
+            fail_msg: >-
+              ollama_dev_port={{ ollama_dev_port | default('unset') }} in group_vars
+              disagrees with model_manifest.yml ports.ollama_dev={{ (manifest.ports | default({})).ollama_dev | default('unset') }}.
+              Make them equal — probe_backends.py reads the manifest, the service
+              binds the group_var.
+            success_msg: "Dev-instance port {{ ollama_dev_port }} agrees with the manifest ports registry."
+          when: ollama_dev_enabled | default(false) | bool
+
     # Take over from any hand-rolled ollama launchd service (e.g. a com.ollama or
     # local.ollama plist binding 0.0.0.0 from a manual setup). Every LaunchAgents
-    # *.plist that runs `ollama serve` / sets OLLAMA_HOST, EXCEPT our own
-    # com.ollama.serve, is booted out and renamed aside — otherwise the old one
+    # *.plist that runs `ollama serve` / sets OLLAMA_HOST, EXCEPT the ones this
+    # playbook owns, is booted out and renamed aside — otherwise the old one
     # keeps :11434 and our LAN bind never takes effect (and bootstrap fails).
     # Renamed to .disabled-by-playbook (not deleted) so it is recoverable; see
     # runbooks/ollama.md. Skipped under --check (it mutates launchd/files).
@@ -36,7 +100,9 @@
         changed=0
         for f in "$la"/*.plist; do
           [ -e "$f" ] || continue
-          [ "$(basename "$f")" = "com.ollama.serve.plist" ] && continue
+          case "$(basename "$f")" in
+            com.ollama.serve.plist|com.ollama.dev.plist|com.ollama.warm.plist) continue ;;
+          esac
           if grep -qi 'ollama' "$f" && grep -qiE '>serve<|OLLAMA_HOST' "$f"; then
             label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$f" 2>/dev/null || true)
             [ -n "$label" ] && launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
@@ -52,58 +118,156 @@
     # Templating the plist only NOTIFIES the restart handler. The service is
     # bounced (bootout + bootstrap, dropping resident models) exclusively when
     # the rendered plist actually changes -- not on every run (F7).
-    - name: Template Ollama launchd plist
+    - name: Template Ollama launchd plist (pipeline instance)
       ansible.builtin.template:
         src: templates/ollama.plist.j2
         dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
         mode: '0644'
       notify: Restart Ollama
 
-    # Idempotent load: bootstrap the service only if it is not already loaded.
-    # This does NOT bounce a running service, so residency is preserved.
-    - name: Ensure Ollama service is bootstrapped
+    # --- dev instance (Fault B fix 1: separate the dev zoo from the pipeline) ---
+    # The `dev/*` zoo gets its OWN server, slot budget and keep-alive on :11435.
+    # It deliberately shares OLLAMA_MODELS with the pipeline instance (the default
+    # ~/.ollama/models) so a model is downloaded once, not twice — only RESIDENCY
+    # is partitioned, which is the thing that was actually contended. All pulls go
+    # through the pipeline instance (tasks/pull-models.yml) to keep writes to the
+    # shared blob store single-writer.
+    - name: Template Ollama launchd plist (dev instance)
+      ansible.builtin.template:
+        src: templates/ollama.plist.j2
+        dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.dev.plist"
+        mode: '0644'
+      vars:
+        ollama_label: com.ollama.dev
+        ollama_instance_bind: "{{ ollama_dev_bind }}"
+        # FINITE, deliberately: an ad-hoc experiment must release its slot on its
+        # own. `-1` here would recreate the original fault inside the dev instance.
+        ollama_instance_keep_alive: "{{ ollama_dev_keep_alive | default('10m') }}"
+        ollama_instance_max_loaded: "{{ ollama_dev_max_loaded_models | default(1) }}"
+        ollama_instance_log_name: ollama-dev
+      when: ollama_dev_enabled | default(false) | bool
+      notify: Restart Ollama dev
+
+    - name: Remove the dev instance when it is not enabled
       ansible.builtin.shell: |
         uid=$(id -u)
-        if ! launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1; then
-          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.serve.plist"
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.dev.plist"
+        if [ -f "$plist" ]; then
+          launchctl bootout "gui/${uid}/com.ollama.dev" 2>/dev/null || true
+          rm -f "$plist"
+          echo removed
+        fi
+      register: ollama_dev_removed
+      changed_when: "'removed' in ollama_dev_removed.stdout"
+      when: not (ollama_dev_enabled | default(false) | bool)
+
+    # Idempotent load: bootstrap the service only if it is not already loaded.
+    # This does NOT bounce a running service, so residency is preserved.
+    - name: Ensure Ollama services are bootstrapped
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="{{ item }}"
+        if ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
+          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
           echo bootstrapped
         fi
+      loop: "{{ ['com.ollama.serve'] + (['com.ollama.dev'] if (ollama_dev_enabled | default(false) | bool) else []) }}"
       register: ollama_bootstrap
       changed_when: "'bootstrapped' in ollama_bootstrap.stdout"
+
+    # Bounce now rather than at end-of-play: the residency warm/verify steps below
+    # must run against the service the plists above describe, not the old one.
+    - name: Apply any pending service restarts before verifying
+      ansible.builtin.meta: flush_handlers
 
     # Positive confirmation that ollama actually came up on its bind address, so a
     # run does not just "mostly pass" while the service is unreachable. Retries
     # absorb async startup; a real failure to serve fails the run loudly (F9).
     - name: Wait for Ollama to answer on its bind address
       ansible.builtin.uri:
-        url: "http://{{ (ollama_bind | default('127.0.0.1:11434')).split(':')[0] }}:11434/api/tags"
+        url: "http://{{ item }}/api/tags"
         status_code: 200
+      loop: "{{ [ollama_bind | default('127.0.0.1:11434')] + ([ollama_dev_bind] if (ollama_dev_enabled | default(false) | bool) else []) }}"
       register: ollama_ready
       retries: 15
       delay: 2
       until: ollama_ready.status == 200
       when: not ansible_check_mode
 
+    # --- residency: keep the pinned models warm (Fault B mitigation 3) --------
+    - name: Install the pipeline warm-keeper
+      when: inference_role != ''
+      block:
+        # The slot budget must be able to hold every pinned model at once, or the
+        # invariant is arithmetically impossible and no amount of warming helps.
+        - name: Assert the slot budget can hold every pinned pipeline model
+          ansible.builtin.assert:
+            that:
+              - ollama_max_loaded_models is defined
+              - (ollama_max_loaded_models | int) >= (ollama_pinned_models | length)
+            fail_msg: >-
+              OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models | default('unset') }}
+              cannot hold the {{ ollama_pinned_models | length }} pinned pipeline
+              model(s) {{ ollama_pinned_models | map(attribute='name') | list }}.
+              Raise it only with the unified memory to match (see the arithmetic in
+              group_vars/inference_{{ inference_role }}.yml).
+            success_msg: >-
+              Slot budget {{ ollama_max_loaded_models | default('unset') }} holds
+              {{ ollama_pinned_models | length }} pinned model(s).
+
+        - name: Ensure the playbook work dir exists (holds the warm-keeper script)
+          ansible.builtin.file:
+            path: "{{ ollama_warm_script | dirname }}"
+            state: directory
+            mode: '0755'
+
+        - name: Render the pipeline warm-keeper script
+          ansible.builtin.template:
+            src: templates/ollama-warm.sh.j2
+            dest: "{{ ollama_warm_script }}"
+            mode: '0755'
+
+        - name: Template the warm-keeper launchd agent
+          ansible.builtin.template:
+            src: templates/ollama-warm.plist.j2
+            dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.warm.plist"
+            mode: '0644'
+          notify: Restart Ollama warm-keeper
+
+        - name: Ensure the warm-keeper agent is bootstrapped
+          ansible.builtin.shell: |
+            uid=$(id -u)
+            if ! launchctl print "gui/${uid}/com.ollama.warm" >/dev/null 2>&1; then
+              launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.warm.plist"
+              echo bootstrapped
+            fi
+          register: ollama_warm_bootstrap
+          changed_when: "'bootstrapped' in ollama_warm_bootstrap.stdout"
+
+        # NOTE: the residency invariant is NOT asserted here. This file runs
+        # BEFORE tasks/pull-models.yml, so on a first provisioning run the models
+        # may not be on disk yet. The warm-and-assert step lives in
+        # tasks/verify-ollama-residency.yml, imported after the pulls.
+
     # A role node binds the LAN IP only (G30), so 127.0.0.1 / the CLI / the
     # menu-bar app cannot reach it. Say so plainly so the run is self-explanatory.
     - name: Report where Ollama is serving
       ansible.builtin.debug:
-        msg:
-          - "Ollama is serving on {{ ollama_bind | default('127.0.0.1:11434') }}"
-          - "This is an inference-role node: it binds the LAN IP only (G30), NOT 127.0.0.1."
-          - "Local CLI on this box: export OLLAMA_HOST={{ ollama_bind | default('127.0.0.1:11434') }}"
-          - "The menu-bar Ollama.app defaults to 127.0.0.1 and will NOT reach it."
-      when: >-
-        ('inference_small' in group_names) or
-        ('inference_medium' in group_names)
+        msg: >-
+          {{ ["Ollama (pipeline) is serving on " ~ (ollama_bind | default('127.0.0.1:11434')),
+              "This is an inference-role node: it binds the LAN IP only (G30), NOT 127.0.0.1.",
+              "Local CLI on this box: export OLLAMA_HOST=" ~ (ollama_bind | default('127.0.0.1:11434')),
+              "The menu-bar Ollama.app defaults to 127.0.0.1 and will NOT reach it."]
+             + (["Ollama (dev zoo) is serving on " ~ ollama_dev_bind ~ " — point every dev/* router entry here, NOT at :11434."]
+                if (ollama_dev_enabled | default(false) | bool) else
+                ["No separate dev instance on this host: anything loaded on :11434 competes with the pipeline models for slots."]) }}
+      when: inference_role != ''
 
     # Inference nodes must not sleep on AC or they drop off the tailnet. Applied
     # only to hosts in an inference-role group (F4); requires root.
     - name: Prevent system sleep on AC power (inference nodes only)
       become: true
       ansible.builtin.command: pmset -c sleep 0
-      when: >-
-        ('inference_small' in group_names) or
-        ('inference_medium' in group_names)
+      when: inference_role != ''
       changed_when: false
       tags: ['power']

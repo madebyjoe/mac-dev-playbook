@@ -57,9 +57,143 @@ Put the `SSH_USER` key **only in the control node's `.env`**, not in the box's o
 
 ### Running a specific set of tagged tasks
 
-You can filter which part of the provisioning process to run by specifying a set of tags using `ansible-playbook`'s `--tags` flag. The tags available are `homebrew`, `mas`, `config`, `ollama`, `llamacpp`, `models`, `litellm`, and `power`.
+`--tags` filters which part of the provisioning run executes. Tags are a **union**,
+not an intersection: `--tags ollama,mas` runs everything tagged *either*.
 
-    ansible-playbook main.yml --limit personal --tags "homebrew"
+| Tag | Runs | Applies to |
+|---|---|---|
+| `homebrew` | taps, CLI packages, casks (+ the strict failure gate) | every profile |
+| `mas` | Mac App Store apps (+ the strict failure gate) | every profile |
+| `herdr` | the herdr vendor-script install | every profile, **work included** |
+| `config` | all three service-config tasks: ollama, llama.cpp, transcribe | non-work |
+| `ollama` | ollama service config **+** model plan/pull **+** residency check **+** router snippet | non-work |
+| `llamacpp` | the per-model llama.cpp launchd services | inference-role hosts |
+| `transcribe` | the whisper-server service on the M1 Pro | `inference_small` only |
+| `models` | the storage-aware planner/pulls + the residency check | inference-role hosts |
+| `litellm` | re-emit `artifacts/litellm/<host>.yml` | inference-role hosts |
+| `verify` | the `/api/ps` residency assertion, on its own | inference-role hosts |
+| `power` | `pmset -c sleep 0` (needs sudo) | inference-role hosts |
+
+Anything not in an inference-role group skips the inference tags entirely, so
+`--tags ollama` on a work Mac is a no-op rather than an error.
+
+#### Common runs
+
+**Set up or top up a normal machine.** The everyday run — safe to repeat, and the
+default for a laptop:
+
+```
+ansible-playbook main.yml --limit personal --ask-become-pass
+ansible-playbook main.yml --limit work --ask-become-pass
+```
+
+**Just installed something new in a package list?** Skip straight to it:
+
+```
+ansible-playbook main.yml --limit personal --tags homebrew
+ansible-playbook main.yml --limit personal --tags homebrew,mas   # both install layers
+ansible-playbook main.yml --limit work --tags herdr              # just herdr
+```
+
+**Preview before committing.** `--check` renders every template and shows the
+model plan without changing anything. Pair it with `--diff` to see the actual
+plist changes:
+
+```
+ansible-playbook main.yml --limit headless --check --diff --ask-become-pass
+```
+
+**Bring up the M1 Pro as an inference node.** Two passes on purpose — look at the
+plan first, then let it pull:
+
+```
+# 1. dry: renders plists, prints the model plan, pulls nothing
+ansible-playbook main.yml --limit headless --tags ollama,transcribe --ask-become-pass
+
+# 2. for real: downloads models, starts services, asserts residency
+ansible-playbook main.yml --limit headless --tags ollama,transcribe \
+  -e model_pull_dry_run=false --ask-become-pass
+```
+
+**Touch the services but not the models.** Re-render and bounce the launchd
+services only — no planner, no pulls, no snippet:
+
+```
+ansible-playbook main.yml --limit headless --tags config --ask-become-pass
+```
+
+**Narrower still**, when you only care about one service:
+
+```
+ansible-playbook main.yml --limit headless --tags transcribe            # whisper-server only
+ansible-playbook main.yml --limit headless --tags llamacpp              # llama.cpp only
+ansible-playbook main.yml --limit headless --tags ollama --skip-tags models,litellm
+```
+
+**Is the residency invariant still holding?** A read-only check against
+`/api/ps` — no pulls, no service changes. This is the one to run days later, or
+after someone has been experimenting on the box:
+
+```
+ansible-playbook main.yml --limit headless --tags verify
+```
+
+**Re-emit the router snippet** after editing the manifest, without touching the
+machine (the snippet lands in `artifacts/litellm/` on the control node):
+
+```
+ansible-playbook main.yml --limit headless --tags litellm
+```
+
+**Stop an inference node from sleeping**, on its own:
+
+```
+ansible-playbook main.yml --limit headless --tags power --ask-become-pass
+```
+
+**Drive a remote Mac** — identical commands; only `.env` decides local vs. SSH
+(see *Which machine does a run target?* above):
+
+```
+ansible-playbook main.yml --limit headless --tags ollama --ask-become-pass
+```
+
+#### Flags worth knowing
+
+| Flag | Effect |
+|---|---|
+| `--limit <profile>` | **Mandatory.** `personal`, `work`, or `headless`. |
+| `--ask-become-pass` / `-K` | Needed whenever `power`/`pmset` or the Rosetta install runs. |
+| `--check` / `--diff` | Preview. Templates render, plans print, nothing is installed or started. |
+| `-e model_pull_dry_run=false` | **Actually download models.** Default is a dry plan — nothing is pulled without this. |
+| `-e soft_fail=true` | Downgrade the strict install gate to a summary instead of failing the run. |
+| `-e allow_loopback=true` | Let an inference-role host run without a LAN IP in `.env` (laptop dev). |
+| `-e skip_residency_check=true` | Skip the `/api/ps` assertion. |
+| `-e herdr_enabled=false` | Skip herdr on this run. |
+| `-e herdr_force_install=true` | Re-run the herdr installer even though it is already on `PATH` (upgrade). |
+
+Two defaults are deliberate and worth repeating: **no model is ever downloaded
+without `-e model_pull_dry_run=false`**, and **a failed tap/package/cask/MAS app
+fails the whole run** unless you pass `-e soft_fail=true`.
+
+### Non-Homebrew installs
+
+Most software comes from Homebrew or the App Store. **herdr** does not — it ships a
+vendor install script (`curl -fsSL https://herdr.dev/install.sh | sh`), so it lives
+in `tasks/install-herdr.yml` rather than a package list. It is installed on **every
+profile, work machines included**, and only when `herdr` is not already on `PATH`
+(`~/.local/bin` and `~/bin` are probed too), so re-runs do not silently re-fetch and
+re-execute a remote script.
+
+Two things worth knowing: the install is **not version-pinned** — whatever the
+vendor serves at run time is what lands (`herdr_install_url` is a variable, so a
+pinned or mirrored URL can be substituted) — and it is skippable per run.
+
+```
+ansible-playbook main.yml --limit work --tags herdr      # just herdr
+ansible-playbook main.yml --limit work -e herdr_enabled=false     # skip it
+ansible-playbook main.yml --limit work -e herdr_force_install=true  # reinstall/upgrade
+```
 
 ### Local addressing (`.env`)
 
@@ -83,17 +217,50 @@ The Ollama launchd service binds to **loopback (`127.0.0.1:11434`) by default** 
 
 Work-profile machines never get Ollama configured at all (see the work guard in `main.yml`). See the runbooks below.
 
+#### Model residency: two ollama instances on the small node
+
+An `inference_small` host runs **two** ollama servers. `com.ollama.serve` on
+`:11434` holds only the alias-serving models (`tier: pipeline` in the manifest —
+`small` and `embed`); `com.ollama.dev` on `:11435` holds the ad-hoc `dev/*` zoo
+with its own slot budget and a *finite* keep-alive. They share one model store, so
+nothing is downloaded twice — only residency is partitioned.
+
+This exists because the zoo sharing one instance was evicting the pipeline models:
+`small` was taking 16–76s for a prompt the M4 Pro answered in 2.5s, and `embed`
+intermittently returned `Compute error.` 500s. `OLLAMA_KEEP_ALIVE=-1` does **not**
+prevent that — at the slot cap ollama evicts the least-recently-used model
+regardless of keep-alive. `runbooks/ollama.md` has the full diagnosis, the slot
+arithmetic, and the residency invariant the run now asserts against `/api/ps`
+rather than trusting.
+
 ### Headless inference quickstart
 
-The exact sequence to bring a headless Mac up as an inference backend. A bare `--limit headless` run **without** role-group membership intentionally yields a loopback-only node (F4) — role membership is what turns on LAN serving.
+The exact sequence to bring a headless Mac up as an inference backend, end to end (the recipes above are the à-la-carte version). A bare `--limit headless` run **without** role-group membership intentionally yields a loopback-only node (F4) — role membership is what turns on LAN serving.
 
 1. **Add the host to a role group** in `inventory` (membership only): put `mac-headless` under `[inference_small]` (M1 Pro) or `[inference_medium]` (M4 Pro).
 2. **Fill `.env`** with its LAN IP (`MAC_HEADLESS_LAN_IP=...`, matching the router's static DHCP reservation; G30 = LAN). See `.env.example`.
-3. **Dry check:** `ansible-playbook main.yml --limit headless --ask-become-pass --check` (`--ask-become-pass`/`-K` is needed for the `pmset` never-sleep task). Review the plan and the rendered plist/snippet diffs.
-4. **Provision for real** (pulls models, starts services): rerun without `--check`, adding `-e model_pull_dry_run=false`.
-5. **Verify the backend:** `python3 scripts/probe_backends.py` (or `--only mac-headless`). Note a role node binds `<lan_ip>:11434` **only** — not `127.0.0.1` — so on the box itself the `ollama` CLI/app need `export OLLAMA_HOST=<lan_ip>:11434` (see `runbooks/ollama.md`). The provisioning run prints where it is serving.
-6. **Reconcile the router** (human, on Unraid): diff the emitted `artifacts/litellm/mac-headless.yml` against the router's `config.yaml`, fix `api_base` values (see `runbooks/verification.md`), then `docker compose restart litellm`.
-7. **Alias acceptance** (human): run the router-side `smoke-test.sh` with the `vk-smoke` key.
+3. **Dry check** — review the model plan and the rendered plist/snippet diffs before anything happens. `-K` is needed for the `pmset` never-sleep task:
+
+   ```
+   ansible-playbook main.yml --limit headless --check --diff --ask-become-pass
+   ```
+
+4. **Provision for real** — pulls models, starts services, warms the pinned models and asserts residency:
+
+   ```
+   ansible-playbook main.yml --limit headless -e model_pull_dry_run=false --ask-become-pass
+   ```
+
+5. **Verify the backend:** `python3 scripts/probe_backends.py` (or `--only mac-headless`). Note a role node binds `<lan_ip>:11434` **only** — not `127.0.0.1` — so on the box itself the `ollama` CLI/app need `export OLLAMA_HOST=<lan_ip>:11434` (see `runbooks/ollama.md`). The provisioning run prints where it is serving. On an `inference_small` host the dev zoo is a *second* server on `:11435`.
+6. **Reconcile the router** (human, on Unraid): diff the emitted `artifacts/litellm/mac-headless.yml` against the router's `config.yaml`, fix `api_base` values (see `runbooks/verification.md`), then `docker compose restart litellm`. **Every `dev/*` entry must point at `:11435`** — pointing one back at `:11434` re-creates the model-slot thrashing the split exists to prevent.
+7. **Alias acceptance** (human): run the router-side `smoke-test.sh` with the `vk-smoke` key — **at least three times**. The `embed` failure it guards against was intermittent at 2-in-3, so one green run proves nothing.
+8. **Later, and this is the real gate:** re-check residency after the box has been idle for hours, or after anyone has been experimenting on it:
+
+   ```
+   ansible-playbook main.yml --limit headless --tags verify
+   ```
+
+   A fix that only holds while you are watching it is not a fix.
 
 ## Runbooks
 

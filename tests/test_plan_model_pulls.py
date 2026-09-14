@@ -251,6 +251,78 @@ class TestServesAliasLint(unittest.TestCase):
         self.assertEqual(planner.lint_manifest(planner.load_manifest(_MANIFEST)), [])
 
 
+class TestCloudTagLint(unittest.TestCase):
+    """A `-cloud` tag proxies inference off-LAN and must never reach a pull."""
+
+    def test_cloud_tag_is_rejected(self):
+        models = small_models() + [M("qwen3.5:9b-cloud", "ollama", 0, "small", 1)]
+        self.assertEqual(planner.lint_cloud_tags(models), ["qwen3.5:9b-cloud"])
+
+    def test_clean_manifest_has_no_cloud_tags(self):
+        self.assertEqual(planner.lint_cloud_tags(small_models()), [])
+
+    def test_shipped_manifest_has_no_cloud_tags(self):
+        self.assertEqual(
+            planner.lint_cloud_tags(planner.load_manifest(_MANIFEST)), [])
+
+    def test_lint_cli_fails_on_a_cloud_tag(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+            fh.write('models:\n'
+                     '  - { name: "qwen3.5:9b-cloud", engine: ollama, size_gb: 1,'
+                     ' role: small, priority: 1, tier: dev }\n')
+            path = fh.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, _SCRIPT, "--manifest", path, "--lint"],
+                capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("-cloud", proc.stderr)
+        finally:
+            os.unlink(path)
+
+
+class TestTierLint(unittest.TestCase):
+    """`tier` is the residency class; an unknown value would silently unpin."""
+
+    def test_known_tiers_pass(self):
+        models = small_models()
+        models[0]["tier"] = "pipeline"
+        models[1]["tier"] = "standby"
+        self.assertEqual(planner.lint_tiers(models), [])
+
+    def test_unknown_tier_is_reported(self):
+        models = small_models()
+        models[0]["tier"] = "production"
+        self.assertEqual(planner.lint_tiers(models),
+                         [{"name": "a:7b", "tier": "production"}])
+
+    def test_absent_tier_is_allowed_and_plans_as_dev(self):
+        self.assertEqual(planner.lint_tiers(small_models()), [])
+        plan = planner.build_plan(small_models(), "small",
+                                  free_gb=200, reserve_floor_gb=100, present={})
+        self.assertTrue(all(e["tier"] == "dev" for e in plan["pull"]))
+
+    def test_pipeline_tier_is_carried_into_the_plan(self):
+        models = small_models()
+        models[0]["tier"] = "pipeline"
+        plan = planner.build_plan(models, "small",
+                                  free_gb=200, reserve_floor_gb=100, present={})
+        tiers = {e["name"]: e["tier"] for e in plan["pull"]}
+        self.assertEqual(tiers["a:7b"], "pipeline")
+
+    def test_shipped_manifest_pins_exactly_the_alias_models(self):
+        models = planner.load_manifest(_MANIFEST)
+        pinned = {m["name"] for m in models
+                  if m.get("tier") == "pipeline" and m.get("engine") == "ollama"}
+        self.assertEqual(pinned, {"qwen3.5:9b-mlx", "qwen3-embedding:4b",
+                                  "qwen3.6:27b-mlx"})
+        # Every pinned ollama entry must actually serve an alias, or it is
+        # spending a slot for nothing.
+        for m in models:
+            if m.get("tier") == "pipeline":
+                self.assertTrue(m.get("serves_alias"), m.get("name"))
+
+
 class TestManifestParsing(unittest.TestCase):
 
     def test_parses_flow_style(self):

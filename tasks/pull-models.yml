@@ -12,7 +12,35 @@
 
 - name: Plan and pull inference models
   when: inference_role != ''
+  # The ollama CLI is a CLIENT: `ollama list` and `ollama pull` talk to a server.
+  # A role node binds its LAN IP ONLY (G30) -- nothing listens on 127.0.0.1 -- so
+  # without this every planner probe and every pull fails with "could not connect
+  # to ollama app". Pulls deliberately go through the PIPELINE instance even for
+  # dev-tier models: the two instances share ~/.ollama/models and writes to the
+  # shared blob store stay single-writer.
+  environment:
+    OLLAMA_HOST: "{{ ollama_bind | default('127.0.0.1:11434') }}"
   block:
+    # `-cloud` tags transparently proxy inference off-LAN to Ollama's hosted
+    # service. One typo'd tag silently defeats the entire architecture, so the
+    # manifest is re-checked here, on the target, immediately before anything is
+    # pulled -- not just in the control-node lint. Same reason `ollama signin`
+    # must never be run on an inference host (it is never invoked by this
+    # playbook, and nothing here requires an account).
+    - name: Assert no -cloud tags are anywhere in the manifest (inference stays on-LAN)
+      ansible.builtin.assert:
+        that:
+          - manifest_cloud_tags | length == 0
+        fail_msg: >-
+          Refusing to pull: {{ manifest_cloud_tags }} are -cloud tags. Those proxy
+          inference OFF-LAN to Ollama's hosted service and defeat the point of this
+          node. Remove them from model_manifest.yml.
+        success_msg: "No -cloud tags in the manifest; all inference stays on this box."
+      vars:
+        manifest_cloud_tags: >-
+          {{ lookup('ansible.builtin.file', model_manifest_path)
+             | regex_findall('name:\s*"([^"]*-cloud[^"]*)"') }}
+
     # The planner must run ON THE TARGET so it sees the target's `ollama list`,
     # free disk, and (llamacpp) present files — not the control node's. Stage the
     # stdlib planner + the manifest to a target work dir so this works under both

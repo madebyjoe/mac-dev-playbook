@@ -128,6 +128,29 @@ class TestTargetDerivation(unittest.TestCase):
         # retired embed port from creeping back in (F13 r3).
         self.assertEqual(got, {(11434, "ollama"), (8082, "transcribe")})
 
+    def test_dev_port_probed_only_when_role_has_dev_tier_entries(self):
+        # No entry is marked `tier: dev`, so the second ollama instance is not
+        # part of this deployment and must not be probed.
+        ports = probe_backends.ports_for_role(self._models(), "small", dev_port=11435)
+        self.assertNotIn(11435, {p for (p, _s, _path) in ports})
+
+        models = self._models() + [
+            {"name": "zoo:1", "engine": "ollama", "role": "small",
+             "port": None, "tier": "dev"},
+        ]
+        ports = probe_backends.ports_for_role(models, "small", dev_port=11435)
+        got = {(p, s) for (p, s, _path) in ports}
+        self.assertEqual(got, {(11434, "ollama"), (11435, "ollama-dev"),
+                               (8082, "transcribe")})
+
+    def test_dev_port_absent_from_registry_is_never_probed(self):
+        models = self._models() + [
+            {"name": "zoo:1", "engine": "ollama", "role": "small",
+             "port": None, "tier": "dev"},
+        ]
+        ports = probe_backends.ports_for_role(models, "small", dev_port=None)
+        self.assertEqual({p for (p, _s, _path) in ports}, {11434, 8082})
+
     def test_ports_for_medium_include_llamacpp(self):
         ports = probe_backends.ports_for_role(self._models(), "medium")
         got = {(p, s) for (p, s, _path) in ports}

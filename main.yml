@@ -19,6 +19,9 @@
     # Where the planner + manifest are staged ON THE TARGET so they run against
     # the target's disk/ollama state (works for connection=local and =ssh).
     inference_workdir: "{{ ansible_facts.env.HOME }}/.cache/mac-dev-playbook"
+    # Warm-keeper for the pinned pipeline models (Fault B mitigation 3). Rendered
+    # on the target and driven by the com.ollama.warm launchd agent.
+    ollama_warm_script: "{{ inference_workdir }}/ollama-warm.sh"
     llamacpp_models_dir: "{{ ansible_facts.env.HOME }}/.cache/llamacpp/models"
     llamacpp_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/llamacpp"
     # transcribe (whisper-server) service — M1 Pro (T17). Model fetched from HF.
@@ -223,6 +226,11 @@
           - "Failed MAS apps: {{ failed_mas | default([]) }}"
       when: soft_fail | default(false) | bool
 
+    # --- non-Homebrew global installs (every profile, work included) ---
+    - name: Install herdr
+      ansible.builtin.import_tasks: tasks/install-herdr.yml
+      tags: ['herdr']
+
     # Configuration tasks
     - name: Configure Ollama
       ansible.builtin.import_tasks: tasks/configure-ollama.yml
@@ -239,6 +247,15 @@
         ('work' not in group_names) and
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'models']
+
+    # Runs AFTER the pulls: the models have to exist before residency can be
+    # asserted (M1 Pro remediation, Fault B).
+    - name: Verify the Ollama residency invariant
+      ansible.builtin.import_tasks: tasks/verify-ollama-residency.yml
+      when: >-
+        ('work' not in group_names) and
+        (('inference_small' in group_names) or ('inference_medium' in group_names))
+      tags: ['ollama', 'models', 'verify']
 
     - name: Configure llama.cpp services
       ansible.builtin.import_tasks: tasks/configure-llamacpp.yml
@@ -274,6 +291,34 @@
         # "Bootstrap failed: 5: Input/output error". Wait for it to unload first.
         for _ in $(seq 1 20); do
           launchctl print "gui/${uid}/com.ollama.serve" >/dev/null 2>&1 || break
+          sleep 0.3
+        done
+        launchctl bootstrap "gui/${uid}" "$plist"
+      changed_when: true
+
+    # The dev-zoo instance (:11435). Same bootout/bootstrap dance, own label.
+    # Bouncing this NEVER touches the pipeline instance's resident models --
+    # which is the entire point of running two of them.
+    - name: Restart Ollama dev
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.dev.plist"
+        launchctl bootout "gui/${uid}/com.ollama.dev" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+          launchctl print "gui/${uid}/com.ollama.dev" >/dev/null 2>&1 || break
+          sleep 0.3
+        done
+        launchctl bootstrap "gui/${uid}" "$plist"
+      changed_when: true
+
+    # The periodic warm-keeper agent (StartInterval, not a daemon).
+    - name: Restart Ollama warm-keeper
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/com.ollama.warm.plist"
+        launchctl bootout "gui/${uid}/com.ollama.warm" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+          launchctl print "gui/${uid}/com.ollama.warm" >/dev/null 2>&1 || break
           sleep 0.3
         done
         launchctl bootstrap "gui/${uid}" "$plist"

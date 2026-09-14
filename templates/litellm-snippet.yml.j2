@@ -8,25 +8,41 @@
 # come from manifest serves_alias markers; only NEW aliases still need confirming
 # against Brief 1's register. Role-namespaced entries (model_name: "<role>/<model>")
 # are also emitted.
+{% if ollama_dev_enabled | default(false) | bool %}
+#
+# TWO OLLAMA INSTANCES ON THIS HOST (M1 Pro remediation, Fault B):
+#   :11434  PIPELINE — the alias-serving models ONLY (tier: pipeline/standby).
+#                      Slot budget {{ ollama_max_loaded_models | default('unset') }}, keep-alive {{ ollama_keep_alive | default('unset') }}.
+#   :{{ ollama_dev_port | default(11435) }}  DEV      — the ad-hoc zoo (tier: dev), own slot budget,
+#                      finite keep-alive, emitted below under the `dev/` namespace.
+# Every dev/* entry MUST point at :{{ ollama_dev_port | default(11435) }}. Pointing one back at :11434
+# re-creates the model-slot thrashing that made `small` 16–76s and `embed`
+# intermittently return `Compute error.` 500s — the pipeline models get evicted
+# because ollama drops the least-recently-used model at the slot cap, keep-alive
+# -1 or not. This is the whole reason the second instance exists.
+{% endif %}
 model_list:
 {% for m in litellm_models %}
-{# ollama shares one instance on :11434; llamacpp/whisper are OpenAI-compatible on their own port. #}
-{% set _prefix = 'ollama' if m.engine == 'ollama' else 'openai' %}
-{% set _port = 11434 if m.engine == 'ollama' else m.port %}
-  - model_name: "{{ inference_role }}/{{ m.name }}"
+{#- ollama shares one instance per RESIDENCY class; llamacpp/whisper are OpenAI-compatible on their own port. #}
+{%- set _prefix = 'ollama' if m.engine == 'ollama' else 'openai' %}
+{%- set _tier = m.tier | default('dev') %}
+{%- set _is_dev = (m.engine == 'ollama') and (_tier == 'dev') and (ollama_dev_enabled | default(false) | bool) %}
+{%- set _port = (ollama_dev_port | default(11435)) if _is_dev else (11434 if m.engine == 'ollama' else m.port) %}
+{%- set _ns = 'dev' if _is_dev else inference_role %}
+  - model_name: "{{ _ns }}/{{ m.name }}"
     litellm_params:
       model: "{{ _prefix }}/{{ m.name }}"
       api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
-{% if m.engine != 'ollama' %}
+{%- if m.engine != 'ollama' %}
       api_key: "dummy"
-{% endif %}
-{% if m.serves_alias is defined and m.serves_alias %}
+{%- endif %}
+{%- if m.serves_alias is defined and m.serves_alias %}
   - model_name: "{{ m.serves_alias }}"
     litellm_params:
       model: "{{ _prefix }}/{{ m.name }}"
       api_base: "http://{{ lan_ip | default(inventory_hostname) }}:{{ _port }}/v1"
-{% if m.engine != 'ollama' %}
+{%- if m.engine != 'ollama' %}
       api_key: "dummy"
-{% endif %}
-{% endif %}
-{% endfor %}
+{%- endif %}
+{%- endif %}
+{%- endfor %}

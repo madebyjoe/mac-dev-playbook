@@ -281,6 +281,8 @@ def _entry_for(m):
     entry = {
         "name": m.get("name"), "engine": engine,
         "size_gb": m.get("size_gb"), "priority": m.get("priority"),
+        # Residency class (schema v1.2). Absent => dev: never pinned.
+        "tier": m.get("tier") or "dev",
     }
     if engine == "llamacpp":
         entry["hf_repo"] = m.get("hf_repo")
@@ -443,6 +445,26 @@ def lint_manifest(models):
             for (a, r), names in sorted(claims.items()) if len(names) > 1]
 
 
+def lint_cloud_tags(models):
+    """Return every entry whose tag would proxy inference off-LAN.
+
+    An ollama `-cloud` tag runs the model on Ollama's hosted service rather than
+    on this machine, silently. The whole point of these boxes is that inference
+    does not leave the LAN, so a single typo'd tag defeats the architecture. This
+    is a hard lint failure, not a warning, and it runs before anything is pulled.
+    """
+    return [m.get("name") for m in models
+            if "-cloud" in str(m.get("name", "")).lower()]
+
+
+def lint_tiers(models):
+    """Return entries whose `tier` is not one of the known residency classes."""
+    valid = ("pipeline", "standby", "dev")
+    return [{"name": m.get("name"), "tier": m.get("tier")}
+            for m in models
+            if m.get("tier") is not None and str(m.get("tier")).lower() not in valid]
+
+
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
@@ -454,8 +476,9 @@ def render_human(plan):
     L.append("")
     L.append("PULL (%d):" % len(plan["pull"]))
     for e in plan["pull"]:
-        L.append("  + %-38s %s GB  [%s]  (priority %s)"
-                 % (e["name"], e["size_gb"], e["engine"], e["priority"]))
+        L.append("  + %-38s %s GB  [%s]  (priority %s, tier %s)"
+                 % (e["name"], e["size_gb"], e["engine"], e["priority"],
+                    e.get("tier", "dev")))
     L.append("PRESENT / kept (%d):" % len(plan["present"]))
     for e in plan["present"]:
         L.append("  = %-38s [%s]  (already on disk, zero cost)" % (e["name"], e["engine"]))
@@ -511,14 +534,27 @@ def main(argv=None):
     models = load_manifest(args.manifest)
 
     if args.lint:
-        violations = lint_manifest(models)
-        for v in violations:
+        failed = False
+        for v in lint_manifest(models):
+            failed = True
             sys.stderr.write(
                 "lint: alias '%s' claimed by %d entries in role %s: %s\n"
                 % (v["alias"], len(v["entries"]), v["role"], ", ".join(v["entries"])))
-        if violations:
+        for name in lint_cloud_tags(models):
+            failed = True
+            sys.stderr.write(
+                "lint: '%s' is a -cloud tag — it proxies inference OFF-LAN and must "
+                "never appear in the manifest of a local inference node\n" % name)
+        for v in lint_tiers(models):
+            failed = True
+            sys.stderr.write(
+                "lint: '%s' has unknown tier '%s' (expected pipeline|standby|dev)\n"
+                % (v["name"], v["tier"]))
+        if failed:
             return 1
-        sys.stderr.write("lint: OK — serves_alias unique per alias per role\n")
+        sys.stderr.write(
+            "lint: OK — serves_alias unique per alias per role, no -cloud tags, "
+            "tiers valid\n")
         return 0
 
     if not args.verify and not args.role:

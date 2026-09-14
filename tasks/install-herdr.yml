@@ -1,0 +1,47 @@
+---
+# herdr — installed on EVERY profile, work machines included.
+#
+# Not a Homebrew formula, so it cannot live in core_homebrew_packages: it ships a
+# vendor install script (`curl -fsSL https://herdr.dev/install.sh | sh`). That
+# means two things worth stating plainly:
+#   * The install is NOT pinned — whatever the vendor serves at run time is what
+#     gets installed. That is the vendor's distribution model, not a choice made
+#     here; `herdr_install_url` is a variable so a pinned/mirrored URL can be
+#     substituted without touching this task.
+#   * It is only fetched when `herdr` is not already on PATH, so re-running the
+#     playbook does not silently re-pull and re-run a remote script every time.
+#     Pass `-e herdr_force_install=true` to deliberately reinstall/upgrade.
+# Set `-e herdr_enabled=false` to skip it entirely on a given run.
+
+- name: Manage herdr
+  when: herdr_enabled | default(true) | bool
+  block:
+    # The play pins PATH to the Homebrew dirs, but vendor scripts commonly land
+    # in ~/.local/bin or ~/bin — probe those too or every run reinstalls.
+    - name: Check whether herdr is already installed
+      ansible.builtin.shell: |
+        PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        command -v herdr
+      register: herdr_check
+      changed_when: false
+      failed_when: false
+      check_mode: false  # read-only probe; must run under --check to gate correctly
+
+    - name: Install herdr
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL "{{ herdr_install_url }}" | sh
+      register: herdr_install
+      when: >-
+        herdr_check.rc != 0 or
+        (herdr_force_install | default(false) | bool)
+      changed_when: true
+
+    - name: Report the herdr install location
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'herdr already installed at ' ~ herdr_check.stdout
+             if herdr_check.rc == 0
+             else 'herdr installed from ' ~ herdr_install_url ~
+                  ' — if `herdr` is not on your PATH, the install script put it in
+                  ~/.local/bin or ~/bin; add that to your shell profile.' }}

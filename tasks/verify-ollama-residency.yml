@@ -1,0 +1,116 @@
+---
+# Assert the residency invariant (M1 Pro remediation, Fault B).
+#
+# `config.yaml` has always CLAIMED this invariant:
+#
+#   > OLLAMA_MAX_LOADED_MODELS=2 so `small` + `embed` stay resident together.
+#   > Residency acceptance test: `ollama ps` after 6h idle still lists both.
+#
+# It was never checked, and it was not holding: /api/ps showed a rolling cast of
+# ad-hoc dev models in the slots and NEITHER pipeline model resident, so every
+# pipeline call paid a full cold load. This file checks it instead of trusting it.
+#
+# It is a SEPARATE file, imported AFTER tasks/pull-models.yml, because
+# configure-ollama.yml runs before the pulls — asserting residency there would
+# fail on a first provisioning run purely because the models were not downloaded
+# yet. It derives its own facts rather than relying on configure-ollama.yml having
+# run, so it is safe under any --tags selection.
+#
+# Runs when either:
+#   * a real (non-dry) provisioning run just pulled models, or
+#   * you asked for it explicitly with --tags verify, which is the standalone
+#     "is the invariant still holding?" check and must NOT require pretending to
+#     pull (-e model_pull_dry_run=false) just to get a read.
+#
+# Escape hatch: -e skip_residency_check=true.
+
+- name: Resolve this host's inference role
+  ansible.builtin.set_fact:
+    inference_role: "{{ 'small' if 'inference_small' in group_names else ('medium' if 'inference_medium' in group_names else '') }}"
+
+- name: Verify the residency invariant
+  when:
+    - inference_role != ''
+    - not ansible_check_mode
+    # On a dry/plan run the models may not be on disk at all, so there is nothing
+    # to assert -- UNLESS the human explicitly asked for the check by tag.
+    - >-
+      (not (model_pull_dry_run | default(true) | bool)) or
+      ('verify' in (ansible_run_tags | default([])))
+    - not (skip_residency_check | default(false) | bool)
+  block:
+    - name: Load the model manifest
+      ansible.builtin.include_vars:
+        file: "{{ model_manifest_path }}"
+        name: manifest
+
+    - name: Select the pinned pipeline models for this role
+      ansible.builtin.set_fact:
+        ollama_pinned_models: >-
+          {{ manifest.models
+             | selectattr('engine', 'equalto', 'ollama')
+             | selectattr('role', 'in', [inference_role, 'either'])
+             | selectattr('tier', 'defined')
+             | selectattr('tier', 'equalto', 'pipeline')
+             | list }}
+
+    # The warm script is rendered by tasks/configure-ollama.yml. A tag selection
+    # that reaches this file without reaching that one (e.g. --tags models) would
+    # otherwise die on a missing file, and asserting residency on a cold server
+    # that was never warmed would be a false failure. So: check, and say why.
+    - name: Check for the warm-keeper script
+      ansible.builtin.stat:
+        path: "{{ ollama_warm_script }}"
+      register: ollama_warm_script_stat
+
+    - name: Explain why residency is not being asserted
+      ansible.builtin.debug:
+        msg: >-
+          Skipping the residency assertion: {{ ollama_warm_script }} has not been
+          rendered yet, so the pinned models cannot be warmed first and a cold
+          /api/ps would fail for the wrong reason. Run the ollama tag (or a full
+          run) first: ansible-playbook main.yml --limit {{ inventory_hostname | regex_replace('^mac-', '') }} --tags ollama
+      when: not ollama_warm_script_stat.stat.exists
+
+    # Warm SYNCHRONOUSLY first so the read below measures a settled state rather
+    # than racing a cold load. The periodic com.ollama.warm agent does the same
+    # thing every few minutes; this is just the first one, on demand.
+    - name: Warm the pinned pipeline models now (synchronous)
+      ansible.builtin.command: "/bin/sh {{ ollama_warm_script }}"
+      register: ollama_warmed
+      changed_when: false
+      when: ollama_warm_script_stat.stat.exists
+
+    - name: Show what the warm-keeper got back
+      ansible.builtin.debug:
+        msg: "{{ ollama_warmed.stdout_lines | default([]) }}"
+      when: ollama_warm_script_stat.stat.exists
+
+    - name: Read the resident model set from /api/ps
+      ansible.builtin.uri:
+        url: "http://{{ ollama_bind | default('127.0.0.1:11434') }}/api/ps"
+        return_content: true
+      register: ollama_ps
+      when: ollama_warm_script_stat.stat.exists
+
+    - name: Assert every pinned pipeline model is resident
+      when: ollama_warm_script_stat.stat.exists
+      ansible.builtin.assert:
+        that:
+          - ollama_pinned_models | map(attribute='name') | difference(_resident) | length == 0
+        fail_msg: >-
+          Residency invariant BROKEN on {{ inventory_hostname }}: pinned
+          {{ ollama_pinned_models | map(attribute='name') | list }} but /api/ps
+          reports {{ _resident }}. Missing:
+          {{ ollama_pinned_models | map(attribute='name') | difference(_resident) }}.
+          Check OLLAMA_MAX_LOADED_MODELS in the rendered plist, and whether
+          anything other than the pipeline is loading models on
+          {{ ollama_bind | default('127.0.0.1:11434') }} — the dev zoo belongs on
+          the dev instance, not here.
+        success_msg: >-
+          Residency invariant holds: {{ _resident }} resident on
+          {{ ollama_bind | default('127.0.0.1:11434') }}. NOTE this is the
+          point-in-time check only — the real acceptance test is that `ollama ps`
+          still lists both after ~6h idle.
+      vars:
+        _resident: "{{ (ollama_ps.json | default({})).get('models', []) | map(attribute='name') | list }}"

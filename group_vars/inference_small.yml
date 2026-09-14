@@ -12,7 +12,47 @@
 ollama_bind: "{{ lan_ip | default('127.0.0.1') }}:11434"
 
 # Keep the resident model loaded indefinitely (G19 latency requirement).
+#
+# CAVEAT, learned the hard way (M1 Pro remediation 2026-09-12): `-1` means "never
+# unloads ON A TIMER". It is NOT protection. When the slot cap is reached ollama
+# evicts the LEAST-RECENTLY-USED model regardless of its keep-alive — and since
+# pipeline traffic is bursty while a human experimenting is continuous, the
+# eviction victims were consistently `small` and `embed`. Keep-alive is necessary
+# but not sufficient; the slot budget and the dev split below are what hold.
 ollama_keep_alive: -1
+
+# --- slot budget (Fault B fix 2: size it from arithmetic, not from a default) --
+# Pinned pipeline floor on this node, from measured resident sizes:
+#     qwen3.5:9b-mlx      8.12 GB   (alias `small`)
+#   + qwen3-embedding:4b  ~2.5 GB   (alias `embed`)
+#   = ~10.6 GB of 32 GB unified, leaving ~18 GB for KV cache, the OS and the GPU.
+# Two pinned models => two slots. This is only SAFE because the dev zoo has been
+# moved to its own instance below; with the zoo sharing this instance, a cap of 2
+# would starve the pipeline completely (the two slots would be held by whatever a
+# human touched most recently). Do NOT raise this without the unified memory to
+# match — an over-subscribed cap shows up as `Compute error.` 500s from `embed`,
+# which is the Metal allocator failing, not a flaky model.
+ollama_max_loaded_models: 2
+
+# --- dev-zoo instance (Fault B fix 1: the actual fix) -------------------------
+# A SECOND ollama server on :11435 with its own slot budget, so ad-hoc `dev/*`
+# experimentation (glm-ocr, gemma4:*, ornith, translategemma, …) can never evict
+# a pipeline model. Point every `dev/*` entry in the router's config.yaml at this
+# port; :11434 is reserved for the pipeline aliases. The two instances share
+# ~/.ollama/models, so nothing is downloaded twice — only residency is split.
+ollama_dev_enabled: true
+ollama_dev_port: 11435
+ollama_dev_bind: "{{ lan_ip | default('127.0.0.1') }}:{{ ollama_dev_port }}"
+# FINITE by design: an experiment must release its slot on its own. `-1` here
+# would rebuild the original fault inside the dev instance.
+ollama_dev_keep_alive: 10m
+# One slot: the largest dev entry (gemma4:e4b-mlx, 8.47 GB) on top of the ~10.6 GB
+# pipeline floor is ~19 GB of 32 GB. A second dev slot would not fit.
+ollama_dev_max_loaded_models: 1
+
+# Warm-keeper cadence (seconds) for the pinned pipeline models — mitigation, not
+# a fix; it just guarantees a pipeline model is never the LRU eviction candidate.
+ollama_warm_interval: 240
 
 # Manifest roles this node may pull. Manifest entries with role `either` also
 # qualify; entries with role `medium` do not.

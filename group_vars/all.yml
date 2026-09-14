@@ -17,6 +17,15 @@ ansible_connection: "{{ 'ssh' if _env_ssh_user else 'local' }}"
 ansible_host: "{{ _env_ssh_host if (_env_ssh_user and _env_ssh_host) else inventory_hostname }}"
 ansible_user: "{{ _env_ssh_user if _env_ssh_user else omit }}"
 
+# --- non-Homebrew global installs ---------------------------------------------
+# herdr ships a vendor install script rather than a brew formula, so it cannot go
+# in core_homebrew_packages. Installed on EVERY profile, work machines included
+# (tasks/install-herdr.yml, tag: herdr). Not version-pinned — whatever the vendor
+# serves is what lands; point herdr_install_url at a pinned/mirrored copy if that
+# ever needs to change. -e herdr_enabled=false skips it.
+herdr_enabled: true
+herdr_install_url: "https://herdr.dev/install.sh"
+
 core_homebrew_taps: []
 
 core_homebrew_packages:

@@ -5,6 +5,13 @@
 # membership; the work guard is applied at the import in main.yml. The GGML model
 # is fetched honoring model_pull_dry_run; the service is only (re)started once the
 # model file is present, so a dry/check run just renders the plist.
+#
+# Fault A (M1 Pro remediation 2026-09-12): the alias 404'd because the RUNNING
+# whisper-server had been started by hand without --inference-path, so it served
+# /inference while LiteLLM called /v1/audio/transcriptions. The whole argument
+# vector is now rendered from variables into a managed plist (T17 r4) and any
+# hand-rolled whisper LaunchAgent is taken over below, so it cannot be silently
+# dropped again by a hand-edit or shadowed by a rev-1 service holding :8082.
 
 - name: Resolve this host's inference role
   ansible.builtin.set_fact:
@@ -37,11 +44,36 @@
         transcribe_port: "{{ transcribe_entry.port }}"
         whisper_model_file: "{{ _model_file }}"
 
-    - name: Ensure whisper.cpp is installed (provides whisper-server)
+    # ffmpeg is a HARD dependency of this role, not an assumption. `--convert`
+    # shells out to it for anything that is not already 16 kHz mono WAV, and Home
+    # Assistant / Wyoming will not always send a clean one. It is also in
+    # core_homebrew_packages, but this role must not silently depend on another
+    # list staying that way -- if ffmpeg is missing, --convert fails at request
+    # time with a confusing error rather than at provisioning time.
+    - name: Ensure whisper-cpp and its ffmpeg dependency are installed
       community.general.homebrew:
-        name: whisper-cpp
+        name:
+          - whisper-cpp
+          - ffmpeg
         state: present
         update_homebrew: false
+
+    - name: Assert ffmpeg is on the launchd PATH the service will use
+      ansible.builtin.stat:
+        path: /opt/homebrew/bin/ffmpeg
+      register: transcribe_ffmpeg
+
+    - name: Fail loudly if --convert has no ffmpeg to call
+      ansible.builtin.assert:
+        that:
+          - transcribe_ffmpeg.stat.exists
+        fail_msg: >-
+          /opt/homebrew/bin/ffmpeg is missing. whisper-server runs with
+          --convert and launchd's PATH is pinned to /opt/homebrew/bin:/usr/bin:/bin
+          in the plist; without ffmpeg there, every non-WAV upload fails at request
+          time instead of here.
+        success_msg: "ffmpeg present at /opt/homebrew/bin/ffmpeg (--convert can call it)."
+      when: not ansible_check_mode
 
     - name: Ensure transcribe directories exist
       ansible.builtin.file:
@@ -52,6 +84,33 @@
         - "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
         - "{{ whisper_models_dir }}"
         - "{{ whisper_log_dir }}"
+
+    # Take over from any hand-rolled whisper launchd service. This is the exact
+    # shape of Fault A: a rev-1 plist (e.g. co.onetycho.whisper.transcribe.plist
+    # from the llama-server era) still owning :8082 and serving /inference. While
+    # it holds the port, the managed service cannot bind and the alias keeps
+    # 404ing. Booted out and renamed aside -- never deleted -- like the ollama
+    # takeover; see runbooks/transcribe.md.
+    - name: Disable conflicting legacy whisper launchd services
+      ansible.builtin.shell: |
+        set -o pipefail
+        uid=$(id -u)
+        la="{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
+        changed=0
+        for f in "$la"/*.plist; do
+          [ -e "$f" ] || continue
+          [ "$(basename "$f")" = "com.inference.transcribe.plist" ] && continue
+          if grep -qiE 'whisper|/inference<' "$f"; then
+            label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$f" 2>/dev/null || true)
+            [ -n "$label" ] && launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+            mv "$f" "${f}.disabled-by-playbook"
+            echo "disabled $(basename "$f") (label=${label:-unknown})"
+            changed=1
+          fi
+        done
+        [ "$changed" = 1 ] && echo RESULT_CHANGED || true
+      register: transcribe_legacy
+      changed_when: "'RESULT_CHANGED' in transcribe_legacy.stdout"
 
     # Fetch the GGML model. Honors model_pull_dry_run (no separate flag, T17 r3);
     # the executor never runs this live. Convention documented in the runbook.
@@ -82,3 +141,65 @@
         fi
       register: transcribe_bootstrap
       changed_when: "'bootstrapped' in transcribe_bootstrap.stdout"
+
+    - name: Apply any pending transcribe restart before verifying
+      ansible.builtin.meta: flush_handlers
+
+    # --- verification: the alias must be served at the OpenAI path -------------
+    # The 404 in Fault A was whisper-server's own, not the router's. Checking the
+    # path HERE means a dropped --inference-path fails provisioning instead of
+    # surfacing days later as `smoke-test.sh` check 6.
+    - name: Verify the transcribe endpoint path and auth posture
+      when:
+        - not ansible_check_mode
+        - not (model_pull_dry_run | default(true) | bool)
+      block:
+        # Open question from the handoff, answered ON THE BOX rather than assumed:
+        # does the installed whisper-server build have an --api-key flag? The
+        # answer is recorded in the run output and in runbooks/transcribe.md.
+        # `config.yaml` sends api_key: "none" to this backend, which is only
+        # honest if someone has actually checked -- so check.
+        - name: Check whether the installed whisper-server build supports --api-key
+          ansible.builtin.shell: |
+            set -o pipefail
+            "{{ whisper_server_bin | default('/opt/homebrew/bin/whisper-server') }}" --help 2>&1 | grep -q -- '--api-key' \
+              && echo HAS_API_KEY || echo NO_API_KEY
+          register: whisper_api_key_probe
+          changed_when: false
+          failed_when: false
+
+        - name: Report the transcribe auth posture
+          ansible.builtin.debug:
+            msg: >-
+              {{ ('whisper-server DOES support --api-key on this build. Port ' ~ transcribe_port ~
+                  ' is still started WITHOUT it (the router sends api_key "none"); decide deliberately'
+                  ' whether to turn it on, and record it in runbooks/transcribe.md.')
+                 if 'HAS_API_KEY' in (whisper_api_key_probe.stdout | default(''))
+                 else ('whisper-server has NO --api-key flag on this build: port ' ~ transcribe_port ~
+                       ' is UNAUTHENTICATED and the firewall/LAN bind is its only protection.'
+                       ' The router sending api_key "none" is honest. Keep the bind on the LAN IP,'
+                       ' never 0.0.0.0.') }}
+
+        - name: Wait for whisper-server to serve the OpenAI transcription path
+          ansible.builtin.uri:
+            url: "http://{{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions"
+            method: POST
+            # No multipart body, so the server rejects the request -- but it
+            # rejects it as a KNOWN route. 404 means --inference-path did not
+            # take effect and the alias is hard down; that is the failure to catch.
+            status_code: [200, 400, 404, 422, 500]
+          register: transcribe_path_check
+          retries: 10
+          delay: 3
+          until: transcribe_path_check.status is defined and transcribe_path_check.status != 404
+          failed_when: >-
+            (transcribe_path_check.status | default(0)) == 404 or
+            (transcribe_path_check.status | default(0)) == 0
+
+        - name: Confirm the transcribe path is served
+          ansible.builtin.debug:
+            msg: >-
+              transcribe is serving /v1/audio/transcriptions on
+              {{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}
+              (http {{ transcribe_path_check.status }} to an empty POST — a 404 here
+              would mean --inference-path was dropped).

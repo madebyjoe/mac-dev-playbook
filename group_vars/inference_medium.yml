@@ -12,7 +12,23 @@
 ollama_bind: "{{ lan_ip | default('127.0.0.1') }}:11434"
 
 # Keep the resident model loaded indefinitely (G19 latency requirement).
+# See group_vars/inference_small.yml for why `-1` is necessary but NOT sufficient:
+# at the slot cap ollama evicts the least-recently-used model regardless.
 ollama_keep_alive: -1
+
+# --- slot budget (sized from arithmetic, not left at ollama's default) --------
+# This node serves exactly one alias (`medium`) from one ~22 GB model, and that
+# is measurably why it has never been slow or flaky: one resident model, nothing
+# contending. One slot codifies the healthy state. A second concurrent ~20 GB
+# medium-tier load would be ~43 GB of 48 GB before KV cache — do not raise this
+# without redoing the arithmetic.
+ollama_max_loaded_models: 1
+
+# NO dev-zoo instance here. The M1 Pro gets one (see inference_small) because its
+# pipeline models were being evicted by ad-hoc experimentation. Adding an
+# experimentation surface to THIS box is a boundary decision, not a capacity one
+# (this is the sensitive inference node) — flip it deliberately or not at all.
+ollama_dev_enabled: false
 
 # Manifest roles this node may pull. Manifest entries with role `either` also
 # qualify; entries with role `small` do not.

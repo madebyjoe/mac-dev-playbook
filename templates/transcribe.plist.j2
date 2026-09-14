@@ -21,8 +21,23 @@
         <string>--inference-path</string>
         <string>/v1/audio/transcriptions</string>
         <!-- T17 r4 / F17: server-side conversion (ffmpeg) — the alias is
-             format-agnostic for all callers (Brief 9 m4a input verified). -->
+             format-agnostic for all callers (Brief 9 m4a input verified).
+             ffmpeg is an explicit dependency of the role, installed and
+             asserted by tasks/configure-transcribe.yml — not an assumption. -->
         <string>--convert</string>
+        <!-- Decode threads. 8 on the M1 Pro (8 performance cores); overridable
+             per host with whisper_threads. -->
+        <string>--threads</string>
+        <string>{{ whisper_threads | default(8) }}</string>
+{%- if whisper_api_key is defined and whisper_api_key %}
+        <!-- Only rendered if a key is configured AND the installed build has the
+             flag (the run probes `whisper-server --help` and reports which).
+             Unset is the norm: this build has no auth, so the LAN bind plus the
+             firewall scope to the Unraid source is the only protection, and the
+             router sending api_key "none" is honest. -->
+        <string>--api-key</string>
+        <string>{{ whisper_api_key }}</string>
+{%- endif %}
     </array>
     <key>EnvironmentVariables</key>
     <dict>

@@ -8,8 +8,9 @@ the router and never runs during provisioning.
 
 It reads per-host LAN IPs from the shared `.env` (the same parser Ansible uses),
 figures out which host has which inference role from the `inventory`, derives the
-port set from `model_manifest.yml` (11434 per ollama role host, 8082 for the
-whisper/transcribe entry, any llamacpp ports), then does a GET liveness probe of
+port set from `model_manifest.yml` (11434 per ollama role host, 11435 for the
+second "dev zoo" ollama instance where the role has `tier: dev` entries, 8082 for
+the whisper/transcribe entry, any llamacpp ports), then does a GET liveness probe of
 each backend. A probe PASSES if the server answers with any HTTP status (it is
 up); it FAILS on connection refused / timeout (it is down). Latency is reported,
 never asserted (G19 budgets live in Brief 12). Exit is non-zero on any unexpected
@@ -66,13 +67,23 @@ def parse_inventory_roles(text):
     return roles
 
 
-def ports_for_role(models, role):
-    """List of (port, service, path) a host in `role` should be serving."""
+def ports_for_role(models, role, dev_port=None):
+    """List of (port, service, path) a host in `role` should be serving.
+
+    `dev_port` is the second ("dev zoo") ollama instance from the manifest
+    `ports:` registry. It is only probed when this role actually has entries
+    explicitly marked `tier: dev` — a host with no dev zoo runs one instance and
+    must not be reported down for a port it was never meant to serve.
+    """
     in_role = [m for m in models
                if str(m.get("role", "")).lower() in (role, "either")]
     out = []
     if any(str(m.get("engine", "")).lower() == "ollama" for m in in_role):
         out.append((OLLAMA_PORT, "ollama", SERVICE_PATHS["ollama"]))
+    if dev_port and any(str(m.get("engine", "")).lower() == "ollama"
+                        and str(m.get("tier", "")).lower() == "dev"
+                        for m in in_role):
+        out.append((dev_port, "ollama-dev", SERVICE_PATHS["ollama"]))
     for m in in_role:
         engine = str(m.get("engine", "")).lower()
         port = m.get("port")
@@ -88,11 +99,11 @@ def host_key(host):
     return "".join(c if c.isalnum() else "_" for c in host.upper())
 
 
-def build_targets(env, roles, models):
+def build_targets(env, roles, models, dev_port=None):
     """Build the flat list of probe targets from env + role map + manifest."""
     targets = []
     for role, hosts in roles.items():
-        port_set = ports_for_role(models, role)
+        port_set = ports_for_role(models, role, dev_port=dev_port)
         for host in hosts:
             key = host_key(host) + "_LAN_IP"
             lan_ip = env.get(key)
@@ -179,8 +190,11 @@ def main(argv=None):
     except FileNotFoundError:
         roles = {"small": [], "medium": []}
     models = plan_model_pulls.load_manifest(args.manifest)
+    # Second ollama instance ("dev zoo") port, if this deployment has one.
+    port_registry = plan_model_pulls.load_ports(args.manifest)
 
-    targets = build_targets(env, roles, models)
+    targets = build_targets(env, roles, models,
+                            dev_port=port_registry.get("ollama_dev"))
     if args.only:
         targets = [t for t in targets if t["host"] == args.only]
 
