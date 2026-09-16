@@ -25,11 +25,11 @@ warm() {   # warm <api-path> <json-body>
 
 echo "=== $(date '+%Y-%m-%dT%H:%M:%S%z') warming pipeline models on ${BIND} ==="
 {% for m in (ollama_pinned_models | default([])) %}
-{#- Embedding models have no /api/generate; load them through /api/embed. #}
-{%- if 'embed' in (m.serves_alias | default('')) %}
+{# Embedding models have no /api/generate; load them through /api/embed. #}
+{% if 'embed' in (m.serves_alias | default('')) %}
 code=$(warm api/embed '{"model":"{{ m.name }}","input":"","keep_alive":'"${KEEP_ALIVE}"'}')
-{%- else %}
+{% else %}
 code=$(warm api/generate '{"model":"{{ m.name }}","prompt":"","keep_alive":'"${KEEP_ALIVE}"'}')
-{%- endif %}
+{% endif %}
 echo "  {{ m.name }} ({{ m.serves_alias | default('-') }}) -> http ${code}"
-{%- endfor %}
+{% endfor %}

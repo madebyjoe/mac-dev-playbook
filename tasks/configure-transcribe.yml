@@ -84,6 +84,8 @@
         - "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
         - "{{ whisper_models_dir }}"
         - "{{ whisper_log_dir }}"
+        # --convert's scratch space; see the WorkingDirectory note in the template.
+        - "{{ whisper_work_dir }}"
 
     # Take over from any hand-rolled whisper launchd service. This is the exact
     # shape of Fault A: a rev-1 plist (e.g. co.onetycho.whisper.transcribe.plist
@@ -180,26 +182,66 @@
                        ' The router sending api_key "none" is honest. Keep the bind on the LAN IP,'
                        ' never 0.0.0.0.') }}
 
-        - name: Wait for whisper-server to serve the OpenAI transcription path
-          ansible.builtin.uri:
-            url: "http://{{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions"
-            method: POST
-            # No multipart body, so the server rejects the request -- but it
-            # rejects it as a KNOWN route. 404 means --inference-path did not
-            # take effect and the alias is hard down; that is the failure to catch.
-            status_code: [200, 400, 404, 422, 500]
-          register: transcribe_path_check
-          retries: 10
-          delay: 3
-          until: transcribe_path_check.status is defined and transcribe_path_check.status != 404
-          failed_when: >-
-            (transcribe_path_check.status | default(0)) == 404 or
-            (transcribe_path_check.status | default(0)) == 0
+        # The probe MUST send a real multipart body. An empty POST does not come
+        # back 404 on a wrong path -- whisper-server waits for a body that never
+        # arrives and the connection just times out with no HTTP status at all
+        # (verified against the live box 2026-09-15). A bodyless check would
+        # therefore fail even against a correctly configured server.
+        #
+        # Two clips, because they prove different things:
+        #   wav -- the ROUTE exists (--inference-path took effect)
+        #   m4a -- --convert found ffmpeg and transcoded it (the Brief 9 input)
+        - name: Ensure a probe directory exists
+          ansible.builtin.file:
+            path: "{{ inference_workdir }}/transcribe-probe"
+            state: directory
+            mode: '0700'
 
-        - name: Confirm the transcribe path is served
-          ansible.builtin.debug:
-            msg: >-
-              transcribe is serving /v1/audio/transcriptions on
-              {{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}
-              (http {{ transcribe_path_check.status }} to an empty POST — a 404 here
-              would mean --inference-path was dropped).
+        - name: Generate probe clips (1s tone, WAV + m4a)
+          ansible.builtin.shell: |
+            set -o pipefail
+            d="{{ inference_workdir }}/transcribe-probe"
+            ffmpeg -hide_banner -loglevel error -f lavfi \
+              -i "sine=frequency=440:duration=1" -ar 16000 -ac 1 -y "$d/probe.wav"
+            ffmpeg -hide_banner -loglevel error -i "$d/probe.wav" -y "$d/probe.m4a"
+          changed_when: false
+
+        - name: Probe the transcribe endpoint with real audio
+          ansible.builtin.shell: |
+            d="{{ inference_workdir }}/transcribe-probe"
+            url="http://{{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions"
+            probe() {
+              # 000 means the server did not answer at all -- still starting, or
+              # hung. Retry those; return a real HTTP status immediately.
+              for _ in $(seq 1 10); do
+                c=$(curl -s -m 90 -o /dev/null -w '%{http_code}' \
+                      -F "file=@$1" -F "model={{ transcribe_entry.name }}" "$url")
+                [ "$c" != "000" ] && break
+                sleep 3
+              done
+              echo "$c"
+            }
+            echo "wav=$(probe "$d/probe.wav") m4a=$(probe "$d/probe.m4a")"
+          register: transcribe_probe
+          changed_when: false
+
+        - name: Assert the OpenAI transcription path is served and converts
+          ansible.builtin.assert:
+            that:
+              - "'wav=200' in transcribe_probe.stdout"
+              - "'m4a=200' in transcribe_probe.stdout"
+            fail_msg: >-
+              transcribe is NOT serving {{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions
+              correctly ({{ transcribe_probe.stdout | trim }}).
+              wav=404 means --inference-path was dropped and the server is back on
+              /inference -- the alias is hard down and smoke-test.sh check 6 will
+              fail. wav=200 with m4a!=200 means --convert could not reach ffmpeg on
+              the launchd PATH. wav=000 means the server never answered.
+            success_msg: >-
+              transcribe serves /v1/audio/transcriptions and converts non-WAV input
+              ({{ transcribe_probe.stdout | trim }}).
+
+        - name: Remove the probe clips
+          ansible.builtin.file:
+            path: "{{ inference_workdir }}/transcribe-probe"
+            state: absent

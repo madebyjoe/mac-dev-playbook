@@ -54,6 +54,34 @@ provisioning instead of surfacing days later as a router smoke-test failure.
 | `--convert` | — | server-side format conversion, needs **ffmpeg** |
 | `--threads` | `whisper_threads`, default `8` | the M1 Pro's performance cores |
 
+Plus one plist key that is not a flag but is just as load-bearing:
+
+| Key | Value | Why |
+|---|---|---|
+| `WorkingDirectory` | `whisper_work_dir` (`~/.cache/whisper/run`) | `--convert` stages a scratch WAV at a relative path; launchd's default `/` is read-only |
+| `EnvironmentVariables.PATH` | `/opt/homebrew/bin:/usr/bin:/bin` | launchd's default PATH cannot see Homebrew, so `--convert` could not find ffmpeg |
+
+**`--convert` also needs a writable working directory — this is the non-obvious
+one.** whisper-server stages the uploaded audio at a *relative* path
+(`./whisper-server-<timestamp>.wav`) and then execs ffmpeg on it. launchd's
+default working directory is `/`, which on modern macOS is a **read-only**
+filesystem, so every conversion fails:
+
+```
+HTTP 500  {"error":"FFmpeg conversion failed."}
+transcribe.log:  Error opening input file ./whisper-server-20260915-205331-133261311.wav.
+```
+
+ffmpeg being on `PATH` is **necessary but not sufficient** — the process finds it,
+runs it, and ffmpeg then cannot write its own output. The plist therefore sets
+`WorkingDirectory` to `whisper_work_dir` (`~/.cache/whisper/run`), created by the
+role. Symptom to recognise: *both* WAV and non-WAV uploads return 500 identically.
+A conversion-only fault would fail the m4a and pass the WAV.
+
+Scratch files are whisper-server's to clean up; if a crash leaves some behind they
+accumulate in `~/.cache/whisper/run` and can be deleted freely while the service
+is stopped.
+
 **ffmpeg is a hard dependency of this role, not an assumption.** `--convert`
 shells out to it for anything that is not already 16 kHz mono WAV, and Home
 Assistant / Wyoming will not always send a clean one. It is installed by this role
@@ -74,20 +102,23 @@ only protection.** The LiteLLM router at `:4000` is the enforcement door for
 clients; the backend port is not exposed to them. That much is true regardless of
 what the binary supports, and it is what makes `api_key: "none"` honest.
 
-**Whether the installed build even has an `--api-key` flag has not been confirmed
-against the box** (router-package note N4 flagged it; nobody has checked). So the
-run checks instead of guessing: every provisioning run probes
-`whisper-server --help` on the target and prints which case it found —
+**The open question from router-package note N4 is now answered.** Checked against
+the box on **2026-09-15**, `whisper-cpp 1.9.1`:
 
-- *no flag* → the posture above is the only one available; nothing to decide.
-- *flag present* → port 8082 is unauthenticated **by choice**. Set
-  `whisper_api_key` to render `--api-key` into the plist, and change the router's
-  `api_key` to match.
+> **`whisper-server` has NO `--api-key` flag — and no auth flag of any kind.**
+> `--help` lists 54 options; the only matches for key/token/auth are
+> `--max-context`, `--print-special`, `--suppress-nst` and friends, all unrelated.
 
-**Record the answer here after the next run**, and re-check after any
-`brew upgrade whisper-cpp`:
+So there is **no option to authenticate this port**, and the posture above is the
+only one available rather than a choice. `config.yaml` sending `api_key: "none"`
+is honest, and the firewall scoping to the Unraid source is load-bearing, not
+belt-and-braces. Treat `:8082` as fully open to anything that can reach the LAN IP.
 
-> **Probed `--api-key` support (update after each run):** _not yet recorded._
+Every provisioning run re-probes `whisper-server --help` and prints what it found,
+so a future build that *gains* the flag will say so instead of silently leaving
+this note stale. If that happens, `whisper_api_key` renders `--api-key` into the
+plist and the router's `api_key` must change to match. **Re-check after any
+`brew upgrade whisper-cpp`.**
 
 ## Taking over from a hand-rolled whisper service
 
@@ -99,6 +130,30 @@ except `com.inference.transcribe.plist`, is booted out and **renamed to
 `*.plist.disabled-by-playbook`** — never deleted. To restore one, rename it back
 and `bootstrap` it (booting out `com.inference.transcribe` first if you want the
 old one to own the port).
+
+## Restarting it: the launchd race
+
+`bootout` is **asynchronous**. Bootstrapping before it finishes returns
+
+```
+Bootstrap failed: 5: Input/output error
+```
+
+and leaves `:8082` **down** — the service is gone and nothing replaced it. The
+`Restart transcribe` handler therefore drains first (polls `launchctl print`
+until the label disappears) and then retries the bootstrap, because unlike ollama
+this service holds a listening socket that can linger for a second or two after
+the job itself is gone. If you bounce it by hand, do the same:
+
+```sh
+uid=$(id -u); label=com.inference.transcribe
+launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+while launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; do sleep 0.3; done
+launchctl bootstrap "gui/${uid}" ~/Library/LaunchAgents/${label}.plist
+```
+
+`launchctl kickstart -k` does not have this problem and is the better verb for a
+plain restart — use it whenever the plist itself has not changed.
 
 ## Commands
 

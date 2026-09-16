@@ -1,7 +1,7 @@
-{#- Periodic warm-keeper agent for the pinned pipeline models (Fault B, mitigation
+{# Periodic warm-keeper agent for the pinned pipeline models (Fault B, mitigation
     3). StartInterval, not KeepAlive: the script is a short one-shot, not a
-    daemon — KeepAlive would respawn it in a tight loop. -#}
-{%- set _log_dir = ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') -%}
+    daemon — KeepAlive would respawn it in a tight loop. #}
+{% set _log_dir = ollama_log_dir | default(ansible_facts.env.HOME + '/Library/Logs/ollama') %}
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

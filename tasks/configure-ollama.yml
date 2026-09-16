@@ -221,11 +221,16 @@
             state: directory
             mode: '0755'
 
+        # The launchd agent execs `/bin/sh <script>` fresh on every tick, so a
+        # script change takes effect on its own. Bouncing the agent anyway makes
+        # it run NOW, so `launchctl list` stops reporting a stale failure from a
+        # previous, broken rendering.
         - name: Render the pipeline warm-keeper script
           ansible.builtin.template:
             src: templates/ollama-warm.sh.j2
             dest: "{{ ollama_warm_script }}"
             mode: '0755'
+          notify: Restart Ollama warm-keeper
 
         - name: Template the warm-keeper launchd agent
           ansible.builtin.template:

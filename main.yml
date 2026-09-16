@@ -27,6 +27,9 @@
     # transcribe (whisper-server) service — M1 Pro (T17). Model fetched from HF.
     whisper_models_dir: "{{ ansible_facts.env.HOME }}/.cache/whisper/models"
     whisper_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/transcribe"
+    # whisper-server's --convert writes its scratch WAV to a RELATIVE path, so the
+    # service needs a writable working directory (launchd's default is /).
+    whisper_work_dir: "{{ ansible_facts.env.HOME }}/.cache/whisper/run"
     whisper_model_base_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
   pre_tasks:
@@ -339,11 +342,31 @@
       ansible.builtin.shell: |
         uid=$(id -u)
         label="com.inference.transcribe"
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
         model="{{ whisper_models_dir }}/{{ whisper_model_file | default('') }}"
-        if [ -n "{{ whisper_model_file | default('') }}" ] && [ -f "$model" ]; then
-          launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
-          launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
-        fi
+        [ -f "$model" ] || exit 0
+        launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+        # bootout is ASYNC. Bootstrapping before it finishes returns
+        # "Bootstrap failed: 5: Input/output error" and leaves :8082 DOWN -- the
+        # same race the Restart Ollama handler documents. Drain first.
+        for _ in $(seq 1 20); do
+          launchctl print "gui/${uid}/${label}" >/dev/null 2>&1 || break
+          sleep 0.3
+        done
+        # Then retry the bootstrap itself: unlike ollama, whisper-server holds a
+        # listening socket (:8082), and the port can linger briefly after the job
+        # is gone, which fails the bootstrap for a second or two.
+        err=$(mktemp)
+        for attempt in $(seq 1 10); do
+          if launchctl bootstrap "gui/${uid}" "$plist" 2>"$err"; then
+            rm -f "$err"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "bootstrap failed after 10 attempts:" >&2
+        cat "$err" >&2; rm -f "$err"
+        exit 1
       changed_when: true
 
     # symbolichotkeys changes only reach the running session after the

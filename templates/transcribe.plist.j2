@@ -29,7 +29,7 @@
              per host with whisper_threads. -->
         <string>--threads</string>
         <string>{{ whisper_threads | default(8) }}</string>
-{%- if whisper_api_key is defined and whisper_api_key %}
+{% if whisper_api_key is defined and whisper_api_key %}
         <!-- Only rendered if a key is configured AND the installed build has the
              flag (the run probes `whisper-server --help` and reports which).
              Unset is the norm: this build has no auth, so the LAN bind plus the
@@ -37,7 +37,7 @@
              router sending api_key "none" is honest. -->
         <string>--api-key</string>
         <string>{{ whisper_api_key }}</string>
-{%- endif %}
+{% endif %}
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -46,6 +46,14 @@
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/bin:/bin</string>
     </dict>
+    <!-- REQUIRED for --convert. whisper-server stages the uploaded audio at a
+         RELATIVE path ("./whisper-server-<ts>.wav") and then execs ffmpeg on it.
+         launchd's default working directory is / , which is not writable, so
+         every conversion fails with {"error":"FFmpeg conversion failed."} and the
+         ffmpeg log reads "Error opening input file ./whisper-server-*.wav".
+         ffmpeg being on PATH is necessary but NOT sufficient. -->
+    <key>WorkingDirectory</key>
+    <string>{{ whisper_work_dir }}</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
