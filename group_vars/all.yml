@@ -100,6 +100,27 @@ core_homebrew_cask_apps:
 
 core_mas_apps: []
 
+# Mackup apps whose profiles sync files under ~/Library/Preferences.
+# cfprefsd refuses to read a symlinked plist, so syncing these makes the
+# preference domain vanish and the app reverts to defaults on every launch.
+# 'macosx' is the one that owns com.apple.symbolichotkeys (the ctrl+space grab).
+mackup_pref_apps_to_ignore:
+  - apple-music
+  - atom
+  - bartender
+  - bettertouchtool
+  - dolphin
+  - lightroom-classic
+  - macosx
+  - rectangle
+  - spotify
+  - terminal
+  - transmission
+  - vlc
+  - whatsapp
+  - xcode
+  - zoom
+
 # Initialize empty profile vars (will be overridden by group_vars)
 profile_homebrew_taps: []
 profile_homebrew_packages: []

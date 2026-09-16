@@ -1,0 +1,91 @@
+---
+# macOS preference-domain hygiene.
+#
+# Background: macOS reads app preferences through cfprefsd, which refuses to
+# follow symlinks. Mackup's default profile symlinks files under
+# ~/Library/Preferences into iCloud Drive, which makes the domain disappear
+# entirely ("Domain does not exist") and the app silently falls back to its
+# built-in defaults on every launch.
+#
+# Two observed symptoms this prevents:
+#   * Rectangle reverting to default hotkeys on every restart.
+#   * ctrl+space being stolen from Ghostty's quick terminal, because
+#     com.apple.symbolichotkeys was symlinked and macOS fell back to its
+#     default (hotkey 60, "Select the previous input source", enabled).
+#
+# See runbooks/macos-preferences.md
+
+- name: Ensure Mackup never syncs cfprefsd preference domains
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_facts.env.HOME }}/.mackup.cfg"
+    marker: "# {mark} ANSIBLE MANAGED — cfprefsd domains"
+    insertafter: '^\[applications_to_ignore\]$'
+    create: false
+    block: |
+      {% for app in mackup_pref_apps_to_ignore %}
+      {{ app }}
+      {% endfor %}
+  tags: ['macos-prefs', 'mackup']
+
+- name: Find preference plists that are symlinks (cfprefsd cannot read these)
+  ansible.builtin.find:
+    paths: "{{ ansible_facts.env.HOME }}/Library/Preferences"
+    patterns: '*.plist'
+    file_type: link
+    recurse: false
+  register: pref_symlinks
+  changed_when: false
+  tags: ['macos-prefs']
+
+- name: Report symlinked preference domains
+  ansible.builtin.debug:
+    msg: >-
+      {{ pref_symlinks.files | length }} symlinked preference plist(s) found.
+      These domains are invisible to macOS and will revert to defaults:
+      {{ pref_symlinks.files | map(attribute='path') | map('basename') | list }}
+  when: pref_symlinks.files | length > 0
+  tags: ['macos-prefs']
+
+# De-symlinking is deliberately NOT automatic: a dangling or evicted iCloud
+# target can mean the only copy of a pref file is remote. Fail loudly and let
+# a human run the documented recovery instead of silently discarding settings.
+- name: Assert no preference domain is symlinked
+  ansible.builtin.assert:
+    that: pref_symlinks.files | length == 0
+    fail_msg: >-
+      Symlinked preference plists found under ~/Library/Preferences. macOS
+      cannot read these, so the owning apps will keep reverting to defaults.
+      Run the recovery in runbooks/macos-preferences.md, then re-run.
+    success_msg: "No symlinked preference domains — cfprefsd can read all prefs."
+  tags: ['macos-prefs']
+
+- name: Read current input-source hotkey state
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c "import subprocess,plistlib,sys;
+      d=plistlib.loads(subprocess.run(['defaults','export','com.apple.symbolichotkeys','-'],
+      capture_output=True).stdout).get('AppleSymbolicHotKeys',{});
+      print(int(any(d.get(k,{}).get('enabled') not in (False,0) for k in ('60','61'))))"
+  register: shk_state
+  changed_when: false
+  check_mode: false   # read-only probe; must also run under --check
+  tags: ['macos-prefs', 'hotkeys']
+
+# Hotkeys 60/61 are "Select the previous/next input source" — ctrl+space and
+# ctrl+option+space. macOS grabs these system-wide, ahead of any app-registered
+# global hotkey, so they must be off for Ghostty's quick terminal to be reliable.
+- name: Disable ctrl+space input-source switching (frees it for Ghostty)
+  ansible.builtin.command:
+    cmd: >-
+      python3 -c "import subprocess,plistlib,tempfile,os;
+      p=subprocess.run(['defaults','export','com.apple.symbolichotkeys','-'],capture_output=True).stdout;
+      d=plistlib.loads(p); s=d.setdefault('AppleSymbolicHotKeys',{});
+      s['60']={'enabled':False,'value':{'parameters':[32,49,262144],'type':'standard'}};
+      s['61']={'enabled':False,'value':{'parameters':[32,49,786432],'type':'standard'}};
+      f=tempfile.NamedTemporaryFile(suffix='.plist',delete=False); plistlib.dump(d,f); f.close();
+      subprocess.run(['defaults','import','com.apple.symbolichotkeys',f.name],check=True);
+      os.unlink(f.name)"
+  when: shk_state.stdout | trim == '1'
+  changed_when: true
+  notify: Activate macOS settings
+  tags: ['macos-prefs', 'hotkeys']

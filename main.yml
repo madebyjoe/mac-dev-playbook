@@ -278,6 +278,14 @@
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'litellm']
 
+    - name: Enforce macOS preference-domain hygiene
+      ansible.builtin.import_tasks: tasks/configure-macos-prefs.yml
+      # GUI profiles only. Guard positively: headless inventories use varying
+      # group names ('headless', 'headless-remote'), so a negative test leaks.
+      when: >-
+        ('personal' in group_names) or ('work' in group_names)
+      tags: ['config', 'macos-prefs']
+
   handlers:
     # Bounce the Ollama service only when the plist actually changed (F7).
     # bootout + bootstrap in the gui/$UID domain replaces deprecated
@@ -336,4 +344,11 @@
           launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
           launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
         fi
+      changed_when: true
+
+    # symbolichotkeys changes only reach the running session after the
+    # settings daemon is poked; otherwise they apply at next login.
+    - name: Activate macOS settings
+      ansible.builtin.command:
+        cmd: /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u
       changed_when: true
