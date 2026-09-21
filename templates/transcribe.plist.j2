@@ -9,11 +9,15 @@
         <string>{{ whisper_server_bin | default('/opt/homebrew/bin/whisper-server') }}</string>
         <string>--model</string>
         <string>{{ whisper_models_dir }}/{{ whisper_model_file }}</string>
-        <!-- Loopback by default (F2); an inference role sets lan_ip (G30 = LAN).
-             whisper-server has NO auth (N4); a non-loopback bind must be the LAN
-             IP, never 0.0.0.0 — firewall-scoped to the Unraid source. -->
+        <!-- Loopback by default (F2). The bind follows the host's TRANSPORT
+             (G30 r4, MDP-4): `lan` -> the role host's LAN IP, firewall-scoped to
+             the Unraid source; `tailnet` -> 127.0.0.1 and nothing else
+             (F-MDP4-2). whisper-server has NO auth (N4), so it is never
+             0.0.0.0 on either transport (F-MDP4-3). NOTE (N3): on a `tailnet`
+             host this service is loopback-only and has no remote route of its
+             own — the Caddy front carries :11434 only. -->
         <string>--host</string>
-        <string>{{ lan_ip | default('127.0.0.1') }}</string>
+        <string>{{ inference_bind_ip }}</string>
         <string>--port</string>
         <string>{{ transcribe_port }}</string>
         <!-- T17 r4 / F16: serve the OpenAI path so the router's openai/ mapping

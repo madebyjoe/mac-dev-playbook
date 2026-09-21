@@ -48,22 +48,126 @@
       (_hostkey ~ '_TAILNET_IP') in _env or
       (_hostkey ~ '_TAILNET_NAME') in _env
 
-# F15: an inference-role host MUST resolve a LAN bind address (G30 = LAN) or the
-# run fails loudly, naming the missing key — never a silent loopback bind that
-# would emit an unreachable api_base. Non-role hosts keep the F2 loopback default.
-- name: Assert an inference-role host has a LAN bind address (F15)
+- name: Note whether this host is an inference-role host
+  ansible.builtin.set_fact:
+    _is_inference_host: >-
+      {{ ('inference_small' in group_names) or ('inference_medium' in group_names) }}
+
+# F15 (MDP-4: now transport-aware). An inference-role host MUST resolve the
+# address its TRANSPORT actually needs, or the run fails loudly naming the
+# missing key — never a silent loopback bind that would emit an unreachable
+# api_base. Non-role hosts keep the F2 loopback default.
+#
+#   lan     — needs `lan_ip`: that IS the bind. -e allow_loopback=true waives it
+#             for laptop dev against an unfilled .env (unchanged behaviour).
+#   tailnet — the bind is 127.0.0.1 by construction, so nothing is needed for
+#             the BIND. `tailnet_ip` is still required because it is what the
+#             emitted snippet's api_base points the router at, and a blank one
+#             would render `http://:11434/v1`. allow_loopback does NOT waive
+#             this: there is no loopback fallback that could be correct here.
+- name: Assert a `lan` inference-role host has a LAN bind address (F15)
   ansible.builtin.assert:
     that:
       - lan_ip is defined
       - (lan_ip | default('')) | length > 0
     fail_msg: >-
-      {{ inventory_hostname }} is in an inference-role group but .env has no
+      {{ inventory_hostname }} is in an inference-role group on the `lan`
+      transport but .env has no
       {{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}_LAN_IP
-      (G30 = LAN transport). Add it to .env (see .env.example), or pass
-      -e allow_loopback=true for laptop dev without a filled .env.
+      (G30 r4: `lan` = bind the LAN IP). Add it to .env (see .env.example), pass
+      -e allow_loopback=true for laptop dev without a filled .env, or set
+      `inference_transport: tailnet` in host_vars/{{ inventory_hostname }}.yml
+      if this host roams.
     success_msg: "LAN bind address resolved for {{ inventory_hostname }}."
   when:
-    - >-
-      ('inference_small' in group_names) or
-      ('inference_medium' in group_names)
+    - _is_inference_host | bool
+    - inference_transport == 'lan'
     - not (allow_loopback | default(false) | bool)
+
+- name: Assert a `tailnet` inference-role host has a tailnet address (F15, MDP-4)
+  ansible.builtin.assert:
+    that:
+      - tailnet_ip is defined
+      - (tailnet_ip | default('')) | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }} is in an inference-role group on the `tailnet`
+      transport but .env has no
+      {{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}_TAILNET_IP.
+      Under `tailnet` that key is LOAD-BEARING: it is the api_base the router
+      dials (G-MDP4-1), while _LAN_IP drops to SSH-only. Add it to .env (see
+      .env.example). -e allow_loopback=true does NOT waive this — the bind is
+      already loopback; what is missing is the address the ROUTER needs.
+    success_msg: "Tailnet address resolved for {{ inventory_hostname }}."
+  when: (_is_inference_host | bool) and inference_transport == 'tailnet'
+
+# G-MDP4-1's default is the raw tailnet_ip; the override exists so a MagicDNS
+# name can be used instead. The usual way to take it is
+# `tailnet_api_host: "{{ tailnet_name }}"` — which renders EMPTY, not an error,
+# when .env has no *_TAILNET_NAME, and an empty host produces `http://:11434/v1`
+# in the snippet. So: if the override is set at all, it must be non-empty.
+- name: Assert a tailnet_api_host override is non-empty (G-MDP4-1)
+  ansible.builtin.assert:
+    that:
+      - (tailnet_api_host | default('')) | length > 0
+    fail_msg: >-
+      tailnet_api_host is set but resolves to an empty string for
+      {{ inventory_hostname }}. If you pointed it at the MagicDNS name, .env has
+      no {{ inventory_hostname | upper | regex_replace('[^A-Z0-9]+', '_') }}_TAILNET_NAME
+      to fill it — add the key, or drop the override and let G-MDP4-1's default
+      (raw tailnet_ip) stand.
+    success_msg: "tailnet_api_host override resolves to '{{ tailnet_api_host | default('') }}'."
+  when:
+    - _is_inference_host | bool
+    - inference_transport == 'tailnet'
+    - tailnet_api_host is defined
+
+# F-MDP4-3: `0.0.0.0` (and `::`) is a PLAYBOOK FAILURE on every host and every
+# transport. There is deliberately no override flag and no `when` that can switch
+# this off — an unauthenticated inference API on every interface is not a thing
+# this repo will render, not even "just for a minute". Extra vars outrank
+# everything else in Ansible, so this is also what catches a stray
+# `-e ollama_bind=0.0.0.0:11434` on the command line.
+- name: "Assert no inference service binds a wildcard address (F-MDP4-3)"
+  ansible.builtin.assert:
+    that:
+      - _wildcard_binds | length == 0
+    fail_msg: >-
+      Wildcard bind refused (F-MDP4-3): {{ _wildcard_binds }}.
+      An ollama/llama.cpp/whisper port has no authentication of its own, so
+      binding every interface exposes it to whatever network this machine is
+      currently attached to — a coffee-shop LAN included. There is no override
+      flag. Use `inference_transport: lan` (bind the LAN IP) or
+      `inference_transport: tailnet` (bind 127.0.0.1 and expose it through
+      `tailscale serve`).
+    success_msg: "No wildcard binds: {{ _binds | reject('equalto', '') | list }}."
+  vars:
+    _binds:
+      - "{{ inference_bind_ip | default('') }}"
+      - "{{ ollama_bind | default('') }}"
+      - "{{ ollama_dev_bind | default('') }}"
+    # Defined ONCE and referenced by both `that` and `fail_msg`. Backslash
+    # handling differs between YAML scalar styles — in a folded (`>-`) scalar a
+    # doubled backslash reaches the regex engine as a literal backslash and the
+    # match silently never fires — so the pattern is written in exactly one
+    # place, in a double-quoted scalar, and the two can no longer disagree.
+    # Covered by the F-MDP4-3 cases in tests/test_wildcard_bind_guard.py.
+    _wildcard_binds: "{{ _binds | select('match', '^(0\\.0\\.0\\.0|::|\\[::\\])') | list }}"
+
+# Belt and braces for the transport itself: under `tailnet` the pipeline bind
+# must be loopback. Without this, `-e ollama_bind=<tailnet_ip>:11434` would pass
+# the wildcard check above while still breaking F-MDP4-2 — it races tailscaled at
+# boot and silently moves local tools off 127.0.0.1.
+- name: Assert a `tailnet` host binds ollama on loopback (F-MDP4-2)
+  ansible.builtin.assert:
+    that:
+      - (ollama_bind | default('')) is match('^127\\.0\\.0\\.1:')
+    fail_msg: >-
+      {{ inventory_hostname }} is on the `tailnet` transport but ollama_bind is
+      '{{ ollama_bind | default('unset') }}', not 127.0.0.1:<port> (F-MDP4-2).
+      A tailnet-IP bind races tailscaled at boot and moves local tools off
+      localhost; the tailnet reaches this host through `tailscale serve` and the
+      loopback Caddy front, never by binding the tailnet interface directly.
+    success_msg: "ollama_bind is loopback on the `tailnet` transport."
+  when:
+    - _is_inference_host | bool
+    - inference_transport == 'tailnet'

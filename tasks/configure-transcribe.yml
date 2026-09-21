@@ -209,7 +209,7 @@
         - name: Probe the transcribe endpoint with real audio
           ansible.builtin.shell: |
             d="{{ inference_workdir }}/transcribe-probe"
-            url="http://{{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions"
+            url="http://{{ inference_bind_ip }}:{{ transcribe_port }}/v1/audio/transcriptions"
             probe() {
               # 000 means the server did not answer at all -- still starting, or
               # hung. Retry those; return a real HTTP status immediately.
@@ -231,7 +231,7 @@
               - "'wav=200' in transcribe_probe.stdout"
               - "'m4a=200' in transcribe_probe.stdout"
             fail_msg: >-
-              transcribe is NOT serving {{ lan_ip | default('127.0.0.1') }}:{{ transcribe_port }}/v1/audio/transcriptions
+              transcribe is NOT serving {{ inference_bind_ip }}:{{ transcribe_port }}/v1/audio/transcriptions
               correctly ({{ transcribe_probe.stdout | trim }}).
               wav=404 means --inference-path was dropped and the server is back on
               /inference -- the alias is hard down and smoke-test.sh check 6 will

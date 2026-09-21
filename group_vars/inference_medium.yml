@@ -3,13 +3,19 @@
 # Membership in this group (not "ollama is installed") is what turns a machine
 # into a medium inference backend. A host is in AT MOST ONE inference-role group.
 
-# Bind Ollama on the host's LAN IP (G30 = LAN transport). LiteLLM on Unraid
-# reaches backends over the wired LAN; the backend port is unauthenticated, so
-# the LAN is the only interface it should listen on (the router at :4000 is the
-# enforcement door). `lan_ip` comes from .env (MAC_<HOST>_LAN_IP), loaded in
-# pre_tasks; if it is unset on a role host the run fails loudly (F15) unless
-# -e allow_loopback=true. Tailscale on the Macs stays for SSH/management only.
-ollama_bind: "{{ lan_ip | default('127.0.0.1') }}:11434"
+# Bind Ollama on `inference_bind_ip` — which the host's TRANSPORT decides
+# (G30 r4, MDP-4). Under `inference_transport: lan` (the default, and what a
+# stationary wired box uses) that is the host's LAN IP from .env
+# (MAC_<HOST>_LAN_IP): LiteLLM on Unraid reaches the backend over the wired LAN,
+# the port is unauthenticated, so the LAN is the only interface it may listen on
+# and the router at :4000 is the enforcement door. Under
+# `inference_transport: tailnet` (a ROAMING host) it is 127.0.0.1 and nothing
+# else (F-MDP4-2) — the remote door is `tailscale serve` into the loopback Caddy
+# front, and the tailnet ACL is the auth. Either way it is NEVER 0.0.0.0:
+# tasks/load-local-env.yml asserts that with no override (F-MDP4-3).
+# If the required address is unset on a role host the run fails loudly (F15);
+# -e allow_loopback=true waives that for `lan` laptop dev only, never `tailnet`.
+ollama_bind: "{{ inference_bind_ip }}:11434"
 
 # Keep the resident model loaded indefinitely (G19 latency requirement).
 # See group_vars/inference_small.yml for why `-1` is necessary but NOT sufficient:

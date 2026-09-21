@@ -32,10 +32,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <!-- Loopback by default. A non-loopback bind exposes an UNAUTHENTICATED
-             inference API on that interface (ollama has no auth of its own). Only
-             inference-role group_vars set a non-loopback bind, and the value is
-             the host's LAN IP so LiteLLM on Unraid reaches the backend over the
-             LAN -- never 0.0.0.0. The VLAN is a backstop, not the access control. -->
+             inference API on that interface (ollama has no auth of its own).
+             Only inference-role group_vars set a non-loopback bind, and what
+             they set is `inference_bind_ip`, decided by the host's TRANSPORT
+             (G30 r4, MDP-4): `lan` -> the host's LAN IP, so LiteLLM on Unraid
+             reaches the backend over the LAN (the VLAN is a backstop, not the
+             access control); `tailnet` -> 127.0.0.1 and nothing else
+             (F-MDP4-2), with `tailscale serve` + the loopback Caddy front as
+             the only remote door and the tailnet ACL as the auth.
+             NEVER 0.0.0.0 or :: on either transport (F-MDP4-3). -->
         <key>OLLAMA_HOST</key>
         <string>{{ _bind }}</string>
 {% if _keep_alive not in ['', None] %}

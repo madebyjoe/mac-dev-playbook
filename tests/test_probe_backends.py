@@ -7,7 +7,9 @@ no tailnet, CI-safe (MDP-2 T18).
 
 import importlib.util
 import os
+import shutil
 import socket
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -44,9 +46,12 @@ def _closed_port():
     return port
 
 
-def _t(host, port, service="ollama", lan_ip="127.0.0.1", path="/api/tags"):
-    return {"host": host, "role": "small", "lan_ip": lan_ip, "port": port,
-            "service": service, "path": path, "env_key": "%s_LAN_IP" % host.upper()}
+def _t(host, port, service="ollama", addr="127.0.0.1", path="/api/tags",
+       transport="lan"):
+    suffix = "_TAILNET_IP" if transport == "tailnet" else "_LAN_IP"
+    return {"host": host, "role": "small", "transport": transport, "addr": addr,
+            "port": port, "service": service, "path": path,
+            "env_key": "%s%s" % (host.upper(), suffix)}
 
 
 class TestProbe(unittest.TestCase):
@@ -71,9 +76,18 @@ class TestProbe(unittest.TestCase):
         self.assertIsNotNone(r["error"])
 
     def test_missing_lan_ip_is_a_failure(self):
-        r = probe_backends.probe(_t("mac-a", self.port, lan_ip=None), timeout=2)
+        r = probe_backends.probe(_t("mac-a", self.port, addr=None), timeout=2)
         self.assertFalse(r["ok"])
         self.assertIn("MAC-A_LAN_IP", r["error"])
+
+    def test_missing_tailnet_ip_names_the_tailnet_key(self):
+        # Under `tailnet` the LOAD-BEARING key is *_TAILNET_IP, so that is the
+        # key the failure must name — pointing at _LAN_IP would send the human
+        # to fix the wrong line in .env (MDP-4).
+        r = probe_backends.probe(
+            _t("mac-a", self.port, addr=None, transport="tailnet"), timeout=2)
+        self.assertFalse(r["ok"])
+        self.assertIn("MAC-A_TAILNET_IP", r["error"])
 
 
 class TestRunExpectations(unittest.TestCase):
@@ -122,23 +136,24 @@ class TestTargetDerivation(unittest.TestCase):
         ]
 
     def test_ports_for_small_are_ollama_plus_whisper(self):
-        ports = probe_backends.ports_for_role(self._models(), "small")
+        ports, unrouted = probe_backends.ports_for_role(self._models(), "small")
         got = {(p, s) for (p, s, _path) in ports}
         # exactly ollama + whisper for the M1 Pro; the exact set forbids any
         # retired embed port from creeping back in (F13 r3).
         self.assertEqual(got, {(11434, "ollama"), (8082, "transcribe")})
+        self.assertEqual(unrouted, [])
 
     def test_dev_port_probed_only_when_role_has_dev_tier_entries(self):
         # No entry is marked `tier: dev`, so the second ollama instance is not
         # part of this deployment and must not be probed.
-        ports = probe_backends.ports_for_role(self._models(), "small", dev_port=11435)
+        ports, _ = probe_backends.ports_for_role(self._models(), "small", dev_port=11435)
         self.assertNotIn(11435, {p for (p, _s, _path) in ports})
 
         models = self._models() + [
             {"name": "zoo:1", "engine": "ollama", "role": "small",
              "port": None, "tier": "dev"},
         ]
-        ports = probe_backends.ports_for_role(models, "small", dev_port=11435)
+        ports, _ = probe_backends.ports_for_role(models, "small", dev_port=11435)
         got = {(p, s) for (p, s, _path) in ports}
         self.assertEqual(got, {(11434, "ollama"), (11435, "ollama-dev"),
                                (8082, "transcribe")})
@@ -148,28 +163,104 @@ class TestTargetDerivation(unittest.TestCase):
             {"name": "zoo:1", "engine": "ollama", "role": "small",
              "port": None, "tier": "dev"},
         ]
-        ports = probe_backends.ports_for_role(models, "small", dev_port=None)
+        ports, _ = probe_backends.ports_for_role(models, "small", dev_port=None)
         self.assertEqual({p for (p, _s, _path) in ports}, {11434, 8082})
 
     def test_ports_for_medium_include_llamacpp(self):
-        ports = probe_backends.ports_for_role(self._models(), "medium")
+        ports, unrouted = probe_backends.ports_for_role(self._models(), "medium")
         got = {(p, s) for (p, s, _path) in ports}
         self.assertEqual(got, {(11434, "ollama"), (8091, "llamacpp")})
+        self.assertEqual(unrouted, [])
+
+    def test_tailnet_probes_the_front_only_and_reports_the_rest_unrouted(self):
+        # MDP-4 / N3: on a roaming host every service binds 127.0.0.1 and
+        # `tailscale serve` fronts the ollama pipeline port alone. The whisper
+        # and dev-zoo ports are UP but have no remote route, so probing them
+        # would report a healthy service as down.
+        models = self._models() + [
+            {"name": "zoo:1", "engine": "ollama", "role": "small",
+             "port": None, "tier": "dev"},
+        ]
+        ports, unrouted = probe_backends.ports_for_role(
+            models, "small", dev_port=11435, transport="tailnet")
+        self.assertEqual({(p, s) for (p, s, _path) in ports},
+                         {(11434, "ollama-front")})
+        self.assertEqual({(u[0], u[1]) for u in unrouted},
+                         {(11435, "ollama-dev"), (8082, "transcribe")})
 
     def test_build_targets_maps_env_and_roles(self):
         env = {"MAC_A_LAN_IP": "192.0.2.10", "MAC_B_LAN_IP": "192.0.2.20"}
         roles = {"small": ["mac-a"], "medium": ["mac-b"]}
-        targets = probe_backends.build_targets(env, roles, self._models())
+        targets, unrouted = probe_backends.build_targets(env, roles, self._models())
         small = [t for t in targets if t["host"] == "mac-a"]
         self.assertEqual({t["port"] for t in small}, {11434, 8082})
-        self.assertTrue(all(t["lan_ip"] == "192.0.2.10" for t in small))
+        self.assertTrue(all(t["addr"] == "192.0.2.10" for t in small))
+        self.assertTrue(all(t["transport"] == "lan" for t in small))
         medium = [t for t in targets if t["host"] == "mac-b"]
         self.assertEqual({t["port"] for t in medium}, {11434, 8091})
+        self.assertEqual(unrouted, [])
 
-    def test_build_targets_missing_env_key_leaves_lan_ip_none(self):
+    def test_build_targets_tailnet_host_dials_the_tailnet_ip(self):
+        # The `lan` fixture keeps using RFC 5737 space; the `tailnet` fixture
+        # uses the CGNAT range Tailscale actually assigns (100.64.0.0/10).
+        env = {"MAC_A_LAN_IP": "192.0.2.10", "MAC_A_TAILNET_IP": "100.64.0.10",
+               "MAC_B_LAN_IP": "192.0.2.20"}
+        roles = {"small": ["mac-a"], "medium": ["mac-b"]}
+        targets, unrouted = probe_backends.build_targets(
+            env, roles, self._models(), transports={"mac-a": "tailnet"})
+        small = [t for t in targets if t["host"] == "mac-a"]
+        self.assertEqual([(t["addr"], t["port"], t["service"]) for t in small],
+                         [("100.64.0.10", 11434, "ollama-front")])
+        self.assertEqual(small[0]["env_key"], "MAC_A_TAILNET_IP")
+        # mac-b was not named in `transports`, so it keeps the `lan` default
+        # and its LAN IP — transport is per-host, never fleet-wide (F-MDP4-1).
+        medium = [t for t in targets if t["host"] == "mac-b"]
+        self.assertTrue(all(t["addr"] == "192.0.2.20" for t in medium))
+        self.assertEqual([(u["host"], u["port"]) for u in unrouted],
+                         [("mac-a", 8082)])
+
+    def test_build_targets_missing_env_key_leaves_addr_none(self):
         roles = {"small": ["mac-a"], "medium": []}
-        targets = probe_backends.build_targets({}, roles, self._models())
-        self.assertTrue(all(t["lan_ip"] is None for t in targets))
+        targets, _ = probe_backends.build_targets({}, roles, self._models())
+        self.assertTrue(all(t["addr"] is None for t in targets))
+
+
+class TestTransportReading(unittest.TestCase):
+    """host_vars/<host>.yml is where transport lives (F-MDP4-1: topology, not an
+    address, so it is versioned rather than in .env)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _write(self, host, body):
+        with open(os.path.join(self.dir, "%s.yml" % host), "w") as fh:
+            fh.write(body)
+
+    def test_missing_file_is_the_lan_default(self):
+        self.assertEqual(probe_backends.host_transport("mac-a", self.dir), "lan")
+
+    def test_reads_tailnet(self):
+        self._write("mac-a", "---\ninference_transport: tailnet\n")
+        self.assertEqual(probe_backends.host_transport("mac-a", self.dir), "tailnet")
+
+    def test_comments_and_quotes_do_not_confuse_it(self):
+        self._write("mac-a", '---\n# inference_transport: lan  <- a comment\n'
+                             'inference_transport: "tailnet"  # roams\n')
+        self.assertEqual(probe_backends.host_transport("mac-a", self.dir), "tailnet")
+
+    def test_an_unknown_value_falls_back_to_lan(self):
+        # Fail SAFE: an unrecognised transport must not silently become
+        # `tailnet` and send the probe at an address nothing serves.
+        self._write("mac-a", "inference_transport: wireguard\n")
+        self.assertEqual(probe_backends.host_transport("mac-a", self.dir), "lan")
+
+    def test_load_transports_maps_every_host(self):
+        self._write("mac-a", "inference_transport: tailnet\n")
+        got = probe_backends.load_transports(["mac-a", "mac-b"], self.dir)
+        self.assertEqual(got, {"mac-a": "tailnet", "mac-b": "lan"})
 
 
 class TestInventoryParsing(unittest.TestCase):

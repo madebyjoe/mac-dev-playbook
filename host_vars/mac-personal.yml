@@ -1,0 +1,24 @@
+---
+# Host vars for mac-personal (M4 Pro, inference_medium) — MDP-4, F-MDP4-1.
+#
+# This laptop TRAVELS. G30 r2/r3 assumed a wired, stationary backend and had it
+# bind `lan_ip`; in the field that is wrong half the time even at home (wired
+# reservation vs Wi-Fi lease) and unreachable-but-still-bound on public Wi-Fi —
+# the socket keeps LISTENing on an address the machine no longer holds, so the
+# `medium` alias is hard down AND local tools cannot reach it on 127.0.0.1
+# either. Hence `tailnet`:
+#
+#   * every inference service here binds 127.0.0.1 only (F-MDP4-2);
+#   * `tailscale serve --tcp` is the single remote door (F-MDP4-5, never Funnel);
+#   * a loopback Caddy front on :11436 rewrites Host so loopback ollama answers
+#     (F-MDP4-4) — see runbooks/inference-front.md;
+#   * local tools (Raycast, IDE) keep using http://127.0.0.1:11434 directly and
+#     therefore keep working with no network at all (F-MDP4-6).
+#
+# The AUTH for this otherwise-unauthenticated API is the tailnet ACL, not this
+# file: only `tag:llm-router` may reach `tag:inference-roaming:11434` (human
+# track H2). Deleting this file alone reverts the host to the `lan` default.
+#
+# Topology only — no addresses here. `tailnet_ip` still comes from `.env`
+# (MAC_PERSONAL_TAILNET_IP), which is load-bearing for this host now.
+inference_transport: tailnet

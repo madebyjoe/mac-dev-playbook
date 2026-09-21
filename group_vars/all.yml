@@ -17,6 +17,45 @@ ansible_connection: "{{ 'ssh' if _env_ssh_user else 'local' }}"
 ansible_host: "{{ _env_ssh_host if (_env_ssh_user and _env_ssh_host) else inventory_hostname }}"
 ansible_user: "{{ _env_ssh_user if _env_ssh_user else omit }}"
 
+# --- Inference transport (MDP-4, G30 r4) ---------------------------------------
+# G30 r2/r3 assumed every inference host was stationary and wired: bind `lan_ip`
+# and let the Unraid router reach it over the LAN. That is still correct for a
+# stationary box (mac-headless, on ServerPhysical) and WRONG for a laptop, which
+# has two home addresses (wired reservation vs Wi-Fi lease) and spends time on
+# public Wi-Fi. So transport is a PER-HOST property, not a fleet constant
+# (F-MDP4-1):
+#
+#   lan     — stationary host. Inference services bind `lan_ip`; the router
+#             reaches them over the LAN. DEFAULT; nothing changes.
+#   tailnet — roaming host. EVERY inference service on it binds 127.0.0.1 and
+#             only 127.0.0.1 (F-MDP4-2) — not the tailnet IP, which races
+#             tailscaled at boot and would move local tools off localhost. The
+#             sole remote door is `tailscale serve` in TCP mode, forwarding
+#             tailnet :11434 -> the loopback Caddy front on :11436, which
+#             rewrites the Host header so loopback ollama accepts the request.
+#             See runbooks/inference-front.md for why the shim has to exist.
+#
+# Set this per host in host_vars/<host>.yml. It is TOPOLOGY, not an address, so
+# it belongs in a versioned file rather than `.env`; and it is not a connection
+# variable, so the "no host vars in the inventory file" prohibition still holds.
+inference_transport: lan
+
+# The address EVERY inference service on this host binds. Never 0.0.0.0 and never
+# `::` on any host or any transport — tasks/load-local-env.yml asserts that
+# unconditionally and there is no override flag (F-MDP4-3).
+inference_bind_ip: "{{ '127.0.0.1' if inference_transport == 'tailnet' else (lan_ip | default('127.0.0.1')) }}"
+
+# Loopback Caddy front, `tailnet` hosts only (F-MDP4-4/F-MDP4-8). Keep in sync
+# with `ports.ollama_front` in model_manifest.yml — configure-inference-front.yml
+# asserts the two agree, the same way the dev-zoo port is guarded. 11435 is the
+# M1 Pro dev zoo; it is NOT reused here.
+ollama_front_port: 11436
+
+# The port `tailscale serve` publishes ON THE TAILNET. 11434 so the router's
+# api_base reads like any other ollama backend. It does not collide with the
+# loopback ollama bind: different address, same port number.
+inference_front_tailnet_port: 11434
+
 # --- non-Homebrew global installs ---------------------------------------------
 # herdr ships a vendor install script rather than a brew formula, so it cannot go
 # in core_homebrew_packages. Installed on EVERY profile, work machines included
