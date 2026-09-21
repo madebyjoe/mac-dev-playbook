@@ -231,3 +231,29 @@ regression to debug.
 No models are deleted by any path here, and the `0.0.0.0` prohibition (F-MDP4-3)
 has no override flag by design — if a revert leaves you wanting one, the answer is
 `inference_transport`, not a wildcard bind.
+
+### MDP-4 Phase C — `small` uplift mechanism
+
+Mechanism only; **no model or alias changed** (F-MDP4-7). `serves_alias: small`
+still points at `qwen3.5:9b-mlx`.
+
+- **`also_serves` (manifest v1.3)** is repo-only. Reverting drops the extra bare
+  `model_name` blocks from the snippet; the router keeps whatever you last
+  applied, since `artifacts/` is never applied by this repo. If you revert while
+  the router still declares `fallbacks: {medium: [medium-degraded]}`, remove that
+  fallback too or the router names an alias nothing defines.
+- **`gpu_wired_limit_mb`** is undefined by default and the task is not even
+  imported then — a complete no-op on every host. Where it HAS been set, two
+  pieces of external state outlive a revert:
+  ```sh
+  sudo launchctl bootout system/com.madebyjoe.gpu-wired-limit 2>/dev/null || true
+  sudo rm -f /Library/LaunchDaemons/com.madebyjoe.gpu-wired-limit.plist
+  sudo reboot        # the sysctl does not revert until the kernel restarts
+  ```
+  Simply unsetting the variable does **not** remove the daemon — the task is a
+  no-op when undefined, which means it does nothing at all, including cleanup.
+  That is deliberate (the brief specifies a complete no-op) but it does mean
+  removal is the manual step above.
+- **`scripts/soak_small_candidate.sh`** makes requests and writes one report
+  file. It never pulls, evicts, or changes an alias, so it has nothing to roll
+  back.

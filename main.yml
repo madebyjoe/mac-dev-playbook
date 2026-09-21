@@ -37,6 +37,10 @@
     inference_front_label: com.madebyjoe.inference-front
     inference_front_caddyfile: "{{ ansible_facts.env.HOME }}/.config/inference-front/Caddyfile"
     inference_front_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/inference-front"
+    # Metal GPU wired-memory limit (MDP-4 T-MDP4-8). `gpu_wired_limit_mb` is
+    # UNDEFINED by default and the task is not imported at all then -- a
+    # complete no-op on every host until a human sets it per host.
+    gpu_wired_limit_label: com.madebyjoe.gpu-wired-limit
 
   pre_tasks:
     - name: Load local addressing (.env)
@@ -308,6 +312,16 @@
         (inference_transport == 'tailnet') and
         ((group_names | select('match', '^inference_') | list | length) > 0)
       tags: ['config', 'inference-front', 'verify']
+
+    # Raising the GPU wired limit is a PRECONDITION for a bigger `small`
+    # candidate (G-MDP4-3), never part of the same change. One variable at a
+    # time: wired limit first, reboot, soak, then consider an alias flip.
+    - name: Configure the Metal GPU wired-memory limit
+      ansible.builtin.import_tasks: tasks/configure-gpu-wired-limit.yml
+      when:
+        - gpu_wired_limit_mb is defined
+        - "'work' not in group_names"
+      tags: ['config', 'gpu-wired-limit']
 
     - name: Enforce macOS preference-domain hygiene
       ansible.builtin.import_tasks: tasks/configure-macos-prefs.yml

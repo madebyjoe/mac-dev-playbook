@@ -20,6 +20,16 @@
 #               which tasks/litellm-artifact.yml runs before rendering. The
 #               snippet emits a bare `model_name: <alias>` block for it in
 #               addition to the role-namespaced entry.
+#   also_serves — (optional, schema v1.3, MDP-4 T-MDP4-9) ADDITIONAL bare LiteLLM
+#               aliases this entry publishes, as a flow list. The snippet emits
+#               one extra bare `model_name` block per item, pointing at the SAME
+#               backend and the SAME tag as serves_alias — it is an alias, not a
+#               second model. Purpose: let the `small` entry also publish
+#               `medium-degraded` so the router can declare
+#               `fallbacks: {medium: [medium-degraded]}` and survive the M4 Pro
+#               being in a tunnel. Lives in the SAME namespace as serves_alias:
+#               `--lint` enforces uniqueness across serves_alias ∪ also_serves
+#               per role, and the `-cloud` rejection applies to aliases too.
 #   tier      — (schema v1.2, M1 Pro remediation 2026-09-12) RESIDENCY class.
 #               pipeline — backs a production alias; must stay resident on the
 #                          PIPELINE ollama instance (:11434). Warm-kept and
@@ -76,7 +86,7 @@ models:
   - { name: "qwen3.5:0.8b-mlx",        engine: ollama, size_gb: 1.2,  role: small,  priority: 10, tier: dev, notes: "Verified. Tagging/extraction tier." }
   - { name: "qwen3.5:2b-mlx",          engine: ollama, size_gb: 3.1,  role: small,  priority: 20, tier: dev, notes: "Verified." }
   - { name: "qwen3.5:4b-mlx",          engine: ollama, size_gb: 4.2,  role: small,  priority: 30, tier: dev, notes: "Estimate — verify (GGUF is 3.4GB; MLX runs slightly larger)." }
-  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, serves_alias: small, tier: pipeline, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias (serves_alias, confirm at review)." }
+  - { name: "qwen3.5:9b-mlx",          engine: ollama, size_gb: 8.0,  role: small,  priority: 40, serves_alias: small, also_serves: [medium-degraded], tier: pipeline, notes: "Estimate — verify (GGUF is 6.6GB). Primary `small` alias (serves_alias, confirm at review). ALSO publishes `medium-degraded` (v1.3) so the router can fall back when the roaming M4 Pro is unreachable — see G-MDP4-3. The alias plumbing is useful TODAY and is independent of any uplift: whether `small` stays at 9B or moves to a bigger candidate, `medium-degraded` keeps pointing at whatever backs `small`." }
   - { name: "gemma4:e2b-mlx",          engine: ollama, size_gb: 7.2,  role: small,  priority: 50, tier: dev, notes: "GGUF size verified at 7.2GB; confirm MLX tag size on first pull." }
   - { name: "gemma4:e4b-mlx",          engine: ollama, size_gb: 9.6,  role: small,  priority: 60, tier: dev, notes: "GGUF size verified; confirm MLX tag. Strong small-tier generalist w/ vision+audio." }
   - { name: "ornith:9b",               engine: ollama, size_gb: 5.6,  role: small,  priority: 70, tier: dev, notes: "Verified. Agentic coding, Qwen3.5 base, MIT." }

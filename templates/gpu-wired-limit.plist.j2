@@ -1,0 +1,34 @@
+{# Root LaunchDaemon that re-applies the Metal GPU wired-memory limit at boot
+   (MDP-4, T-MDP4-8).
+
+   WHY A DAEMON AND NOT JUST `sysctl`. `iogpu.wired_limit_mb` does NOT persist:
+   it reverts to the kernel default on every boot. Setting it by hand produces a
+   machine that works until it is rebooted and then quietly cannot hold the model
+   it was sized for -- which surfaces as `Compute error.` 500s from the Metal
+   allocator, not as anything that says "your sysctl is gone".
+
+   It is a LaunchDaemon (system domain, root), not a LaunchAgent: the sysctl is
+   global kernel state and has to be set before any user logs in. One-shot --
+   RunAtLoad with no KeepAlive, because `sysctl` sets the value and exits; with
+   KeepAlive launchd would treat that normal exit as a crash and respawn it
+   forever. #}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ gpu_wired_limit_label }}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/sbin/sysctl</string>
+        <string>iogpu.wired_limit_mb={{ gpu_wired_limit_mb | int }}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Deliberately absent: KeepAlive. See the header comment. -->
+    <key>StandardOutPath</key>
+    <string>/var/log/{{ gpu_wired_limit_label }}.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/{{ gpu_wired_limit_label }}.err</string>
+</dict>
+</plist>

@@ -1,0 +1,93 @@
+---
+# Metal GPU wired-memory limit (MDP-4, T-MDP4-8). MECHANISM ONLY.
+#
+# Apple Silicon caps how much unified memory the GPU may wire down. The default
+# is roughly 75% of RAM (~21 GB on a 32 GB Mac), which is under the weights of a
+# `medium`-class MoE candidate -- so raising it is a precondition for the
+# G-MDP4-3 `small` uplift, not part of it.
+#
+# `gpu_wired_limit_mb` is UNDEFINED by default and this file is not even
+# imported then: no daemon, no sysctl, no change on any host. Setting it is a
+# deliberate per-host act, and it is ONE variable to change at a time -- raise
+# the limit, reboot, soak, and only then consider moving an alias
+# (runbooks/model-management.md).
+#
+# RAISING THIS IS NOT FREE. Memory wired by the GPU cannot be paged, so an
+# over-generous limit starves the OS and turns a model load into swap thrash or
+# an outright allocator failure. The floor below keeps 5 GB for everything that
+# is not the GPU; it is a floor, not a recommendation.
+
+- name: Assert the wired limit leaves the OS enough memory
+  ansible.builtin.assert:
+    that:
+      - (gpu_wired_limit_mb | int) > 0
+      - (gpu_wired_limit_mb | int) <= (ansible_facts.memtotal_mb | int) - 5120
+    fail_msg: >-
+      gpu_wired_limit_mb={{ gpu_wired_limit_mb }} is not usable on
+      {{ inventory_hostname }} ({{ ansible_facts.memtotal_mb }} MB total). It
+      must be positive and leave at least 5120 MB for the OS and everything that
+      is not the GPU -- so at most
+      {{ (ansible_facts.memtotal_mb | int) - 5120 }} MB here. Memory the GPU
+      wires down cannot be paged out; setting this too high does not fail at
+      boot, it fails later as swap thrash or a Metal allocator error during a
+      model load, which is much harder to attribute.
+    success_msg: >-
+      Wired limit {{ gpu_wired_limit_mb }} MB of {{ ansible_facts.memtotal_mb }}
+      MB leaves {{ (ansible_facts.memtotal_mb | int) - (gpu_wired_limit_mb | int) }}
+      MB for the OS.
+
+- name: Install the GPU wired-limit LaunchDaemon
+  become: true
+  ansible.builtin.template:
+    src: templates/gpu-wired-limit.plist.j2
+    dest: "/Library/LaunchDaemons/{{ gpu_wired_limit_label }}.plist"
+    owner: root
+    group: wheel
+    # launchd REFUSES to load a daemon that is group- or world-writable, and
+    # says so only in the system log.
+    mode: '0644'
+  register: gpu_wired_plist
+
+- name: (Re)load the GPU wired-limit LaunchDaemon
+  become: true
+  ansible.builtin.shell: |
+    label="{{ gpu_wired_limit_label }}"
+    plist="/Library/LaunchDaemons/${label}.plist"
+    launchctl bootout "system/${label}" 2>/dev/null || true
+    launchctl bootstrap system "$plist"
+  changed_when: true
+  when:
+    - gpu_wired_plist is changed
+    - not ansible_check_mode
+
+# The daemon covers every FUTURE boot. This covers the current one, so the
+# machine does not have to be rebooted to be in the state the playbook claims.
+- name: Apply the wired limit now
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/sysctl
+      - "iogpu.wired_limit_mb={{ gpu_wired_limit_mb | int }}"
+  register: gpu_wired_now
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: Confirm the running value
+  ansible.builtin.command:
+    argv: [/usr/sbin/sysctl, -n, iogpu.wired_limit_mb]
+  register: gpu_wired_read
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Assert the kernel took the value
+  ansible.builtin.assert:
+    that:
+      - (gpu_wired_read.stdout | trim | int) == (gpu_wired_limit_mb | int)
+    fail_msg: >-
+      Asked for iogpu.wired_limit_mb={{ gpu_wired_limit_mb }} but the kernel
+      reports {{ gpu_wired_read.stdout | trim }}. The sysctl did not take -- do
+      NOT proceed to a model that depends on the higher limit.
+    success_msg: >-
+      iogpu.wired_limit_mb = {{ gpu_wired_read.stdout | trim }} (persisted for
+      future boots by {{ gpu_wired_limit_label }}).
+  when: not ansible_check_mode

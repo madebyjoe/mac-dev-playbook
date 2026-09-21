@@ -48,8 +48,13 @@ IMPLEMENTED_ENGINES = ("ollama", "llamacpp")  # F6.1: ollama primary, llamacpp T
 # scalars) is out of scope by design.
 # --------------------------------------------------------------------------- #
 def _split_top_level_commas(text):
-    """Split on commas that are not inside single/double quotes."""
-    parts, buf, quote = [], [], None
+    """Split on commas that are not inside quotes OR brackets.
+
+    Bracket depth matters as of schema v1.3: `also_serves: [a, b]` is a flow
+    sequence, and splitting on the comma inside it would silently produce two
+    broken keys instead of one list.
+    """
+    parts, buf, quote, depth = [], [], None, 0
     for ch in text:
         if quote:
             buf.append(ch)
@@ -58,7 +63,13 @@ def _split_top_level_commas(text):
         elif ch in "\"'":
             quote = ch
             buf.append(ch)
-        elif ch == ",":
+        elif ch in "[{":
+            depth += 1
+            buf.append(ch)
+        elif ch in "]}":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == "," and depth == 0:
             parts.append("".join(buf))
             buf = []
         else:
@@ -105,6 +116,14 @@ def _coerce(val):
         return None
     if (val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'"):
         return val[1:-1]
+    # Flow sequence (schema v1.3: `also_serves: [alias, alias]`). Empty brackets
+    # mean an empty list, which is different from "absent" only to a linter.
+    if val[0] == "[" and val[-1] == "]":
+        inner = val[1:-1].strip()
+        if not inner:
+            return []
+        return [_coerce(part.strip()) for part in _split_top_level_commas(inner)
+                if part.strip()]
     # strip a trailing inline comment on unquoted scalars
     if " #" in val:
         val = val.split(" #", 1)[0].strip()
@@ -427,22 +446,60 @@ def build_verification(models, present):
 # --------------------------------------------------------------------------- #
 # Manifest lint — serves_alias uniqueness (F12/T16)
 # --------------------------------------------------------------------------- #
+def aliases_of(m):
+    """Every bare LiteLLM alias an entry publishes: serves_alias + also_serves.
+
+    Schema v1.3. `also_serves` lets one entry publish additional bare aliases
+    pointing at the same backend and tag -- e.g. the `small` entry also
+    publishing `medium-degraded` so the router can declare
+    `fallbacks: {medium: [medium-degraded]}`. Both kinds render identical bare
+    `model_name` blocks, so for every uniqueness and safety rule they are the
+    same thing and must be checked together.
+    """
+    out = []
+    primary = m.get("serves_alias")
+    if primary:
+        out.append(primary)
+    extra = m.get("also_serves") or []
+    if isinstance(extra, str):          # tolerate a single unbracketed value
+        extra = [extra]
+    out.extend(a for a in extra if a)
+    return out
+
+
 def lint_manifest(models):
     """Return violations: any (alias, role) claimed by more than one entry.
 
-    F12: at most one serves_alias per alias per role. The snippet emits a bare
-    model_name for each marked entry, so two claimants would render duplicate,
-    conflicting alias definitions.
+    F12: at most one bare alias per alias per role, counting `serves_alias` and
+    `also_serves` in the SAME namespace (v1.3). The snippet emits a bare
+    model_name for each, so two claimants would render duplicate, conflicting
+    alias definitions -- and a collision between an `also_serves` and somebody
+    else's `serves_alias` is exactly as broken as two `serves_alias` entries.
     """
     claims = {}
     for m in models:
-        alias = m.get("serves_alias")
-        if not alias:
-            continue
         role = str(m.get("role", "")).lower()
-        claims.setdefault((alias, role), []).append(m.get("name"))
+        for alias in aliases_of(m):
+            claims.setdefault((alias, role), []).append(m.get("name"))
     return [{"alias": a, "role": r, "entries": names}
             for (a, r), names in sorted(claims.items()) if len(names) > 1]
+
+
+def lint_self_claimed_alias(models):
+    """Return entries that list their own serves_alias again in also_serves.
+
+    Harmless at render time (the snippet would just emit the block twice) but it
+    is always a mistake, and it hides a real duplicate from a careless reading.
+    """
+    bad = []
+    for m in models:
+        primary = m.get("serves_alias")
+        extra = m.get("also_serves") or []
+        if isinstance(extra, str):
+            extra = [extra]
+        if primary and primary in extra:
+            bad.append({"name": m.get("name"), "alias": primary})
+    return bad
 
 
 def lint_cloud_tags(models):
@@ -453,8 +510,16 @@ def lint_cloud_tags(models):
     does not leave the LAN, so a single typo'd tag defeats the architecture. This
     is a hard lint failure, not a warning, and it runs before anything is pulled.
     """
-    return [m.get("name") for m in models
+    hits = [m.get("name") for m in models
             if "-cloud" in str(m.get("name", "")).lower()]
+    # v1.3: an ALIAS may not carry the tag either. A bare `model_name` ending in
+    # -cloud on the router is just as capable of routing inference off-LAN as a
+    # pull tag is, and it is the name humans actually type.
+    for m in models:
+        for alias in aliases_of(m):
+            if "-cloud" in str(alias).lower():
+                hits.append("%s (alias %s)" % (m.get("name"), alias))
+    return hits
 
 
 def lint_tiers(models):
@@ -526,7 +591,8 @@ def main(argv=None):
     p.add_argument("--verify", action="store_true",
                    help="compare declared vs actual sizes of present models instead of planning")
     p.add_argument("--lint", action="store_true",
-                   help="validate serves_alias uniqueness (<=1 per alias per role) and exit")
+                   help="validate alias uniqueness across serves_alias + also_serves "
+                        "(<=1 per alias per role), reject -cloud tags/aliases, and exit")
     p.add_argument("--dry-run", action="store_true",
                    help="explicit no-op flag; the planner never pulls or deletes regardless")
     args = p.parse_args(argv)
@@ -550,11 +616,16 @@ def main(argv=None):
             sys.stderr.write(
                 "lint: '%s' has unknown tier '%s' (expected pipeline|standby|dev)\n"
                 % (v["name"], v["tier"]))
+        for v in lint_self_claimed_alias(models):
+            failed = True
+            sys.stderr.write(
+                "lint: '%s' lists its own serves_alias '%s' in also_serves; "
+                "drop the duplicate\n" % (v["name"], v["alias"]))
         if failed:
             return 1
         sys.stderr.write(
-            "lint: OK — serves_alias unique per alias per role, no -cloud tags, "
-            "tiers valid\n")
+            "lint: OK — bare aliases (serves_alias + also_serves) unique per role, "
+            "no -cloud tags or aliases, tiers valid\n")
         return 0
 
     if not args.verify and not args.role:

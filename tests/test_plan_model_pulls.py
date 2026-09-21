@@ -251,6 +251,149 @@ class TestServesAliasLint(unittest.TestCase):
         self.assertEqual(planner.lint_manifest(planner.load_manifest(_MANIFEST)), [])
 
 
+class TestAlsoServes(unittest.TestCase):
+    """Schema v1.3: one entry may publish extra bare aliases for the SAME
+    backend and tag, so the router can declare a fallback without pretending
+    the fallback is a different model (MDP-4 T-MDP4-9)."""
+
+    def test_aliases_of_collects_both_fields(self):
+        m = M("a:1", "ollama", 5, "small", 1)
+        m["serves_alias"] = "small"
+        m["also_serves"] = ["medium-degraded", "tiny"]
+        self.assertEqual(planner.aliases_of(m), ["small", "medium-degraded", "tiny"])
+
+    def test_aliases_of_handles_absent_and_empty(self):
+        self.assertEqual(planner.aliases_of(M("a:1", "ollama", 5, "small", 1)), [])
+        m = M("a:1", "ollama", 5, "small", 1)
+        m["serves_alias"] = "small"
+        m["also_serves"] = []
+        self.assertEqual(planner.aliases_of(m), ["small"])
+
+    def test_aliases_of_tolerates_a_bare_string(self):
+        # `also_serves: medium-degraded` without brackets is a plausible typo;
+        # treating it as the characters of a string would be silently absurd.
+        m = M("a:1", "ollama", 5, "small", 1)
+        m["also_serves"] = "medium-degraded"
+        self.assertEqual(planner.aliases_of(m), ["medium-degraded"])
+
+    def test_duplicate_across_serves_alias_and_also_serves_is_a_violation(self):
+        # THE case this lint exists for: a collision between one entry's
+        # also_serves and another entry's serves_alias renders two conflicting
+        # bare model_name blocks, exactly like two serves_alias claimants.
+        a = M("a:1", "ollama", 5, "small", 1)
+        b = M("b:1", "ollama", 5, "small", 2)
+        a["also_serves"] = ["medium-degraded"]
+        b["serves_alias"] = "medium-degraded"
+        violations = planner.lint_manifest([a, b])
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0]["alias"], "medium-degraded")
+        self.assertEqual(set(violations[0]["entries"]), {"a:1", "b:1"})
+
+    def test_duplicate_across_two_also_serves_is_a_violation(self):
+        a = M("a:1", "ollama", 5, "small", 1)
+        b = M("b:1", "ollama", 5, "small", 2)
+        a["also_serves"] = ["degraded"]
+        b["also_serves"] = ["degraded"]
+        self.assertEqual(len(planner.lint_manifest([a, b])), 1)
+
+    def test_same_also_serves_in_different_roles_is_allowed(self):
+        a = M("a:1", "ollama", 5, "small", 1)
+        b = M("b:1", "ollama", 5, "medium", 1)
+        a["also_serves"] = ["degraded"]
+        b["also_serves"] = ["degraded"]
+        self.assertEqual(planner.lint_manifest([a, b]), [])
+
+    def test_cloud_alias_is_rejected_like_a_cloud_tag(self):
+        # The bare alias is the name a human types at the router. A -cloud
+        # alias routes inference off-LAN just as effectively as a -cloud tag.
+        m = M("a:1", "ollama", 5, "small", 1)
+        m["also_serves"] = ["small-cloud"]
+        hits = planner.lint_cloud_tags([m])
+        self.assertEqual(len(hits), 1)
+        self.assertIn("small-cloud", hits[0])
+
+    def test_self_claimed_alias_is_flagged(self):
+        m = M("a:1", "ollama", 5, "small", 1)
+        m["serves_alias"] = "small"
+        m["also_serves"] = ["small"]
+        self.assertEqual(planner.lint_self_claimed_alias([m]),
+                         [{"name": "a:1", "alias": "small"}])
+
+    def test_shipped_manifest_publishes_medium_degraded_from_small(self):
+        models = planner.load_manifest(_MANIFEST)
+        by_alias = {}
+        for m in models:
+            for a in planner.aliases_of(m):
+                by_alias.setdefault((a, m.get("role")), []).append(m["name"])
+        self.assertEqual(by_alias[("medium-degraded", "small")], ["qwen3.5:9b-mlx"])
+        # F-MDP4-7: the mechanism ships, the model does NOT change.
+        self.assertEqual(by_alias[("small", "small")], ["qwen3.5:9b-mlx"])
+
+    def test_lint_cli_fails_on_a_duplicate_alias(self):
+        # End to end through the CLI, since that is what litellm-artifact.yml
+        # actually runs before rendering the snippet.
+        body = (
+            "models:\n"
+            '  - { name: "a:1", engine: ollama, size_gb: 1, role: small, '
+            'priority: 1, serves_alias: small, also_serves: [degraded] }\n'
+            '  - { name: "b:1", engine: ollama, size_gb: 1, role: small, '
+            'priority: 2, serves_alias: degraded }\n'
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+            fh.write(body)
+            path = fh.name
+        try:
+            r = subprocess.run([sys.executable, _SCRIPT, "--manifest", path, "--lint"],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1, r.stderr)
+            self.assertIn("degraded", r.stderr)
+        finally:
+            os.unlink(path)
+
+
+class TestFlowSequenceParsing(unittest.TestCase):
+    """The minimal YAML parser has to survive the new field. A flow list
+    contains commas, and the flow-mapping splitter splits on commas."""
+
+    def _one(self, body):
+        with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+            fh.write("models:\n" + body)
+            path = fh.name
+        try:
+            return planner.load_manifest(path)[0]
+        finally:
+            os.unlink(path)
+
+    def test_multi_item_flow_list_does_not_split_the_entry(self):
+        m = self._one('  - { name: "a:1", engine: ollama, '
+                      'also_serves: [one, two, three], role: small }\n')
+        self.assertEqual(m["also_serves"], ["one", "two", "three"])
+        # and the keys AFTER the list are still parsed, which is what a naive
+        # comma split would destroy
+        self.assertEqual(m["role"], "small")
+        self.assertEqual(m["name"], "a:1")
+
+    def test_empty_flow_list(self):
+        m = self._one('  - { name: "a:1", also_serves: [], role: small }\n')
+        self.assertEqual(m["also_serves"], [])
+        self.assertEqual(m["role"], "small")
+
+    def test_block_style_entry_also_parses_the_list(self):
+        m = self._one('  - name: "a:1"\n'
+                      '    also_serves: [one, two]\n'
+                      '    role: small\n')
+        self.assertEqual(m["also_serves"], ["one", "two"])
+        self.assertEqual(m["role"], "small")
+
+    def test_quoted_commas_inside_notes_still_work(self):
+        # regression guard for the pre-existing quote handling
+        m = self._one('  - { name: "a:1", also_serves: [x], '
+                      'notes: "commas, and colons: fine", role: small }\n')
+        self.assertEqual(m["also_serves"], ["x"])
+        self.assertEqual(m["notes"], "commas, and colons: fine")
+        self.assertEqual(m["role"], "small")
+
+
 class TestCloudTagLint(unittest.TestCase):
     """A `-cloud` tag proxies inference off-LAN and must never reach a pull."""
 

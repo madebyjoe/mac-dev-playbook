@@ -81,13 +81,23 @@ model_list:
 {% if m.engine != 'ollama' %}
 {{ _c }}      api_key: "dummy"
 {% endif %}
-{% if m.serves_alias is defined and m.serves_alias %}
-{{ _c }}  - model_name: "{{ m.serves_alias }}"
+{# Bare aliases: serves_alias (v1.1) plus any also_serves (v1.3). They render
+   identically -- same backend, same tag -- because an also_serves entry IS an
+   alias, not a second model. `plan_model_pulls.py --lint` enforces that no two
+   entries in a role claim the same name across both fields. #}
+{% set _aliases = ([m.serves_alias] if (m.serves_alias is defined and m.serves_alias) else []) + (m.also_serves | default([]) | list) %}
+{% for _alias in _aliases %}
+{% if _alias != m.serves_alias %}
+{{ _c }}  # `{{ _alias }}` is an ALIAS for the same backend and tag as `{{ m.serves_alias | default(m.name) }}`
+{{ _c }}  # (manifest also_serves). Declaring it lets the router name this backend as a
+{{ _c }}  # fallback without pretending it is a different model.
+{% endif %}
+{{ _c }}  - model_name: "{{ _alias }}"
 {{ _c }}    litellm_params:
 {{ _c }}      model: "{{ _prefix }}/{{ m.name }}"
 {{ _c }}      api_base: "http://{{ _api_host }}:{{ _port }}/v1"
 {% if m.engine != 'ollama' %}
 {{ _c }}      api_key: "dummy"
 {% endif %}
-{% endif %}
+{% endfor %}
 {% endfor %}
