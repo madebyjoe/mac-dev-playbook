@@ -1,0 +1,54 @@
+{# launchd agent for the loopback Caddy front (MDP-4, T-MDP4-4).
+
+   Playbook-owned, NOT `brew services`. `brew services start caddy` runs brew's
+   own plist against brew's default Caddyfile (/opt/homebrew/etc/Caddyfile),
+   which is not this config -- it would silently serve something else on some
+   other port, and the two would fight over the process. Same reasoning as the
+   ollama role taking over hand-rolled launchd services.
+
+   Launchd hygiene mirrors templates/ollama.plist.j2, and the service is bounced
+   with the modern bootstrap/bootout (and kickstart -k) verbs in gui/$UID, never
+   the deprecated load/unload. #}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ inference_front_label }}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ caddy_bin | default('/opt/homebrew/bin/caddy') }}</string>
+        <!-- `run`, not `start`: `start` daemonises and returns, which would make
+             launchd think the job exited. `run` stays in the foreground, which
+             is what KeepAlive needs to supervise. -->
+        <string>run</string>
+        <string>--config</string>
+        <string>{{ inference_front_caddyfile }}</string>
+        <!-- The file has no extension Caddy recognises, so name the adapter
+             explicitly rather than relying on autodetection. -->
+        <string>--adapter</string>
+        <string>caddyfile</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd's default PATH cannot see /opt/homebrew/bin. Caddy itself is
+             invoked by absolute path above, but keep this consistent with the
+             other services in this repo. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+        <!-- Caddy stores its data/config under XDG paths derived from HOME. A
+             launchd agent does get HOME, but pinning it keeps the data dir
+             predictable and out of / . -->
+        <key>HOME</key>
+        <string>{{ ansible_facts.env.HOME }}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{ inference_front_log_dir }}/inference-front.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ inference_front_log_dir }}/inference-front.err</string>
+</dict>
+</plist>

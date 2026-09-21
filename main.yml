@@ -31,6 +31,12 @@
     # service needs a writable working directory (launchd's default is /).
     whisper_work_dir: "{{ ansible_facts.env.HOME }}/.cache/whisper/run"
     whisper_model_base_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+    # Loopback Caddy front for a ROAMING inference host (MDP-4 Phase B). Only
+    # rendered where `inference_transport: tailnet`; see
+    # runbooks/inference-front.md for why a Host-rewriting shim has to exist.
+    inference_front_label: com.madebyjoe.inference-front
+    inference_front_caddyfile: "{{ ansible_facts.env.HOME }}/.config/inference-front/Caddyfile"
+    inference_front_log_dir: "{{ ansible_facts.env.HOME }}/Library/Logs/inference-front"
 
   pre_tasks:
     - name: Load local addressing (.env)
@@ -274,12 +280,34 @@
         ('inference_small' in group_names)
       tags: ['config', 'transcribe']
 
+    # A roaming host binds every inference service on 127.0.0.1, so it needs a
+    # door: `tailscale serve` (TCP) into a loopback Caddy that rewrites the Host
+    # header ollama would otherwise 403. Stationary `lan` hosts skip all of this
+    # and keep reaching the LAN bind directly.
+    - name: Configure the roaming inference front (Caddy + tailscale serve)
+      ansible.builtin.import_tasks: tasks/configure-inference-front.yml
+      when: >-
+        ('work' not in group_names) and
+        (inference_transport == 'tailnet') and
+        ((group_names | select('match', '^inference_') | list | length) > 0)
+      tags: ['config', 'inference-front']
+
     - name: Emit LiteLLM router snippet
       ansible.builtin.import_tasks: tasks/litellm-artifact.yml
       when: >-
         ('work' not in group_names) and
         (('inference_small' in group_names) or ('inference_medium' in group_names))
       tags: ['ollama', 'litellm']
+
+    # Runs at the END, like verify-ollama-residency.yml: the front can only be
+    # verified once ollama, Caddy and the serve rule are all in place.
+    - name: Verify the roaming inference front
+      ansible.builtin.import_tasks: tasks/verify-inference-front.yml
+      when: >-
+        ('work' not in group_names) and
+        (inference_transport == 'tailnet') and
+        ((group_names | select('match', '^inference_') | list | length) > 0)
+      tags: ['config', 'inference-front', 'verify']
 
     - name: Enforce macOS preference-domain hygiene
       ansible.builtin.import_tasks: tasks/configure-macos-prefs.yml
@@ -367,6 +395,23 @@
         echo "bootstrap failed after 10 attempts:" >&2
         cat "$err" >&2; rm -f "$err"
         exit 1
+      changed_when: true
+
+    # The loopback Caddy front. `admin off` in the Caddyfile means there is no
+    # admin API, and `caddy reload` needs one -- so a config change is applied by
+    # bouncing the job. kickstart -k restarts a loaded job in place; if the job
+    # is not loaded yet (first run, or someone booted it out) bootstrap it
+    # instead, because kickstart on an unknown label just errors.
+    - name: Restart inference front
+      ansible.builtin.shell: |
+        uid=$(id -u)
+        label="{{ inference_front_label }}"
+        plist="{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
+        if launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
+          launchctl kickstart -k "gui/${uid}/${label}"
+        else
+          launchctl bootstrap "gui/${uid}" "$plist"
+        fi
       changed_when: true
 
     # symbolichotkeys changes only reach the running session after the

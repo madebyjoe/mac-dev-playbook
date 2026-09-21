@@ -1,0 +1,9 @@
+---
+- name: Exercise the MDP-4 asserts only
+  hosts: all
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Load local addressing
+      ansible.builtin.import_tasks: tasks/load-local-env.yml

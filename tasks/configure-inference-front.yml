@@ -1,0 +1,227 @@
+---
+# Loopback Caddy front + `tailscale serve` for a ROAMING inference host
+# (MDP-4 Phase B, T-MDP4-4 / T-MDP4-5). Imported only when
+# `inference_transport == 'tailnet'` and this host is in an inference-role group.
+#
+# The shape, top to bottom:
+#
+#   LiteLLM (Unraid, tailnet node)
+#      | http://<tailnet_ip>:11434/v1        <- tailnet only, ACL-restricted (H2)
+#      v
+#   tailscale serve  (TCP forward, tailnet :11434 -> 127.0.0.1:11436)
+#      v
+#   Caddy  127.0.0.1:11436   (rewrites Host -> localhost:11434)
+#      v
+#   Ollama 127.0.0.1:11434   (loopback ONLY, always -- F-MDP4-2)
+#      ^
+#   Local tools on the laptop (Raycast, IDE) hit 127.0.0.1:11434 DIRECTLY and so
+#   keep working with no network at all (F-MDP4-6).
+#
+# Caddy exists for exactly one reason: loopback ollama 403s any request whose
+# Host header is not localhost-ish, and `tailscale serve` cannot rewrite Host.
+# See runbooks/inference-front.md.
+
+- name: Assert the front port matches the manifest ports registry
+  ansible.builtin.assert:
+    that:
+      - (manifest_ports.ports | default({})).ollama_front is defined
+      - (manifest_ports.ports.ollama_front | int) == (ollama_front_port | int)
+    fail_msg: >-
+      ollama_front_port={{ ollama_front_port | default('unset') }} in group_vars
+      disagrees with model_manifest.yml
+      ports.ollama_front={{ (manifest_ports.ports | default({})).ollama_front | default('unset') }}.
+      Make them equal. Same reasoning as the dev-zoo port: the service binds the
+      group_var while everything that READS the topology (the snippet, the
+      probe, this runbook) reads the manifest, so drift means a port that looks
+      healthy in one place and is dead in the other.
+    success_msg: "Front port {{ ollama_front_port }} agrees with the manifest ports registry."
+  vars:
+    manifest_ports: "{{ lookup('ansible.builtin.file', model_manifest_path) | from_yaml }}"
+
+# Same Homebrew pattern the rest of the playbook uses. Deliberately NOT added to
+# profile_homebrew_packages: caddy is only wanted on a host that actually needs
+# the front, and that is a transport decision, not a profile one.
+- name: Install Caddy (the Host-rewriting shim)
+  community.general.homebrew:
+    name: caddy
+    state: present
+    update_homebrew: false
+
+- name: Ensure the inference-front directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ inference_front_caddyfile | dirname }}"
+    - "{{ inference_front_log_dir }}"
+    - "{{ ansible_facts.env.HOME }}/Library/LaunchAgents"
+
+- name: Render the inference-front Caddyfile
+  ansible.builtin.template:
+    src: templates/Caddyfile.inference-front.j2
+    dest: "{{ inference_front_caddyfile }}"
+    mode: '0644'
+  notify: Restart inference front
+
+# BEFORE anything is (re)started, not after. `admin off` means there is no
+# runtime validation endpoint and a bad config makes the launchd job crash-loop
+# under KeepAlive -- which looks like "the front is down" rather than "the
+# config is wrong". Fail here instead, with Caddy's own error message.
+- name: Validate the rendered Caddyfile
+  ansible.builtin.command:
+    argv:
+      - "{{ caddy_bin | default('/opt/homebrew/bin/caddy') }}"
+      - validate
+      - --config
+      - "{{ inference_front_caddyfile }}"
+      - --adapter
+      - caddyfile
+  register: caddy_validate
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Template the inference-front launchd agent
+  ansible.builtin.template:
+    src: templates/inference-front.plist.j2
+    dest: "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/{{ inference_front_label }}.plist"
+    mode: '0644'
+  notify: Restart inference front
+
+# Idempotent load: bootstrap only if it is not already loaded, so a normal run
+# does not bounce a healthy front.
+- name: Ensure the inference-front agent is bootstrapped
+  ansible.builtin.shell: |
+    uid=$(id -u)
+    label="{{ inference_front_label }}"
+    if ! launchctl print "gui/${uid}/${label}" >/dev/null 2>&1; then
+      launchctl bootstrap "gui/${uid}" "{{ ansible_facts.env.HOME }}/Library/LaunchAgents/${label}.plist"
+      echo bootstrapped
+    fi
+  register: front_bootstrap
+  changed_when: "'bootstrapped' in front_bootstrap.stdout"
+  when: not ansible_check_mode
+
+# Apply any pending restart now rather than at end-of-play: the serve rule and
+# the verification below must run against the Caddy the template describes.
+- name: Apply any pending front restart before wiring the tailnet door
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the front to answer on loopback
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ ollama_front_port }}/api/version"
+    status_code: [200, 403, 404, 502]
+  register: front_ready
+  retries: 10
+  delay: 2
+  until: front_ready.status is defined
+  when: not ansible_check_mode
+
+# --- T-MDP4-5: the only remote door ------------------------------------------
+- name: Resolve the tailscale CLI
+  ansible.builtin.shell: |
+    set -o pipefail
+    if command -v tailscale >/dev/null 2>&1; then
+      command -v tailscale
+    elif [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+      echo /Applications/Tailscale.app/Contents/MacOS/Tailscale
+    else
+      exit 1
+    fi
+  register: tailscale_cli
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# STOP 3 from the brief: halt and report rather than improvise a different door.
+- name: Assert a tailscale CLI exists (STOP 3)
+  ansible.builtin.assert:
+    that:
+      - tailscale_cli.rc == 0
+      - (tailscale_cli.stdout | trim) | length > 0
+    fail_msg: >-
+      No tailscale CLI on PATH and no
+      /Applications/Tailscale.app/Contents/MacOS/Tailscale on
+      {{ inventory_hostname }}. This host is on the `tailnet` transport, so
+      `tailscale serve` is the ONLY way the router can reach it -- every
+      inference service here binds 127.0.0.1. Install Tailscale (the standalone
+      build; the sandboxed Mac App Store build has no serve support) or move the
+      host back to `inference_transport: lan`. STOPPING rather than picking a
+      different door.
+    success_msg: "tailscale CLI: {{ tailscale_cli.stdout | trim }}"
+
+# The serve config is READ, compared, and only then written. `tailscale serve`
+# exits 0 whether or not it changed anything, so a return code cannot drive
+# `changed` -- the before/after config does.
+- name: Note the resolved CLI and the forward target
+  ansible.builtin.set_fact:
+    _ts: "{{ tailscale_cli.stdout | trim }}"
+    _want_target: "127.0.0.1:{{ ollama_front_port }}"
+
+- name: Read the current tailscale serve config
+  ansible.builtin.command:
+    argv: ["{{ _ts }}", serve, status, --json]
+  register: serve_before
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Note whether the tailnet TCP forward already exists
+  ansible.builtin.set_fact:
+    _forward_present: "{{ _serve_forward == _want_target }}"
+  vars:
+    _doc: "{{ (serve_before.stdout | default('') | trim or '{}') | from_json }}"
+    _serve_forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
+
+- name: Open the tailnet TCP forward
+  ansible.builtin.command:
+    argv:
+      - "{{ _ts }}"
+      - serve
+      - --bg
+      - --tcp
+      - "{{ inference_front_tailnet_port }}"
+      - "tcp://{{ _want_target }}"
+  register: serve_apply
+  failed_when: false
+  # Keyed off the BEFORE config (the forward was absent, so writing it is a
+  # change), and confirmed against the AFTER config by the assert below.
+  changed_when: not (_forward_present | bool)
+  # NEVER under --check: this mutates tailnet-visible state.
+  when:
+    - not ansible_check_mode
+    - not (_forward_present | bool)
+
+- name: Re-read the tailscale serve config
+  ansible.builtin.command:
+    argv: ["{{ _ts }}", serve, status, --json]
+  register: serve_after
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+# STOP 1 from the brief: a port conflict is REPORTED, never silently worked
+# around by choosing a different tailnet port.
+- name: Assert the tailnet TCP forward is in place (STOP 1)
+  ansible.builtin.assert:
+    that:
+      - _after_forward == _want_target
+    fail_msg: >-
+      `tailscale serve` did not publish tailnet
+      :{{ inference_front_tailnet_port }} -> {{ _want_target }} on
+      {{ inventory_hostname }}. serve config now reports
+      '{{ _after_forward | default('nothing') }}';
+      command said: {{ (serve_apply.stderr | default('')) | trim
+                       or (serve_apply.stdout | default('')) | trim or 'n/a' }}.
+      If this is a port conflict with loopback ollama, STOP and report it -- do
+      NOT pick a different tailnet port, because the router's api_base and the
+      tailnet ACL both name {{ inference_front_tailnet_port }} and changing it
+      here silently desynchronises all three.
+    success_msg: >-
+      Tailnet door open: :{{ inference_front_tailnet_port }} -> {{ _want_target }}
+      (raw TCP forward; no TLS termination, no Funnel).
+  vars:
+    _doc: "{{ (serve_after.stdout | default('') | trim or '{}') | from_json }}"
+    _after_forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
+  when: not ansible_check_mode

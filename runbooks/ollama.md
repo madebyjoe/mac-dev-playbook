@@ -9,11 +9,14 @@ plist at `~/Library/LaunchAgents/com.ollama.serve.plist`) rendered by
 It serves the local
 inference API that the Unraid LiteLLM router fronts. It is configured only on
 non-`work` hosts that have `ollama` installed; **work-profile machines never run
-it** (F3). Where it binds is decided by inference-role membership, not by the
-profile: with no role group it binds **loopback `127.0.0.1:11434`** (Ollama has no
-auth, so a non-loopback bind would expose an unauthenticated API); a host in
-`inference_small`/`inference_medium` binds its **LAN IP** (`ollama_bind`, from
-`lan_ip` in `.env`; G30 = LAN), pins the model resident with
+it** (F3). Where it binds is decided by inference-role membership **and the host's
+transport**, not by the profile: with no role group it binds **loopback
+`127.0.0.1:11434`** (Ollama has no auth, so a non-loopback bind would expose an
+unauthenticated API); a host in `inference_small`/`inference_medium` binds
+`inference_bind_ip`, which is its **LAN IP** under `inference_transport: lan`
+(from `lan_ip` in `.env`) and **`127.0.0.1`** under `inference_transport:
+tailnet` (a roaming host — see `runbooks/inference-front.md`). G30 r4. It pins
+the model resident with
 `OLLAMA_KEEP_ALIVE=-1` (G19) and caps concurrent model slots with
 `OLLAMA_MAX_LOADED_MODELS`. **Every `OLLAMA_*` variable is set in the plist's
 `EnvironmentVariables` dict, never with `launchctl setenv`** — `setenv` does not
@@ -137,11 +140,44 @@ checks because `embed` in isolation passes 6/6 and would hide the fault.
 
 ## Using ollama locally on a role node
 
-An inference-role host binds **`<lan_ip>:11434` only** (G30), **not** `127.0.0.1`.
-So on that box the `ollama` CLI and the menu-bar **Ollama.app** — which default to
-`127.0.0.1:11434` — will look like "ollama isn't running." It is; it's just on the
-LAN IP. This is expected, not a failure (the provisioning run prints where it is
-serving).
+**This depends on the host's transport (G30 r4), and the two cases are opposite.**
+
+### On a `tailnet` (roaming) host — e.g. the M4 Pro
+
+Ollama binds **`127.0.0.1:11434`**, so the `ollama` CLI, the menu-bar
+**Ollama.app**, Raycast and IDE integrations all work with **no configuration and
+no network at all**. That is the point: on a plane, `medium` still answers
+locally.
+
+**F-MDP4-6 — local tools address `http://127.0.0.1:11434` DIRECTLY.** Not through
+the Caddy front on `:11436`, and not through LiteLLM on the router. This is a
+deliberate, written exception to the standing "reference aliases, never hardware"
+rule, and the reasoning is narrow:
+
+- an IDE or a launcher is **not a pipeline** — nothing downstream depends on it
+  having gone through the router's alias indirection, key enforcement or logging;
+- **offline operation is the entire reason this host moved to loopback.** Routing
+  a local tool via the tailnet front would make it depend on `tailscaled` being
+  up and would break in exactly the situation the design exists to survive.
+
+Pipelines still go through the router and its aliases. Only on-box interactive
+tools take this exception. (Repointing them is human track H6.)
+
+```sh
+# Nothing to export. This just works, online or off.
+ollama list
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+The remote path is separate and is documented in `runbooks/inference-front.md`.
+
+### On a `lan` (stationary) host — e.g. the M1 Pro
+
+An inference-role host on the `lan` transport binds **`<lan_ip>:11434` only**,
+**not** `127.0.0.1`. So on that box the `ollama` CLI and the menu-bar
+**Ollama.app** — which default to `127.0.0.1:11434` — will look like "ollama isn't
+running." It is; it's just on the LAN IP. This is expected, not a failure (the
+provisioning run prints where it is serving).
 
 This also applies to the playbook itself: `ollama list` and `ollama pull` are API
 clients, so `tasks/pull-models.yml` exports `OLLAMA_HOST=<lan_ip>:11434` for the
@@ -164,9 +200,15 @@ curl -s http://<lan_ip>:11434/api/tags
 ```
 
 The menu-bar **Ollama.app** cannot be pointed at a non-loopback server; quit it on
-a dedicated backend (`osascript -e 'quit app "Ollama"'`). If you need loopback and
-LAN both, that host should not be a role node (bind stays loopback, F2) — or accept
-`0.0.0.0` as an explicit per-host exception.
+a dedicated backend (`osascript -e 'quit app "Ollama"'`).
+
+If you need loopback **and** remote reach on the same host, that is what the
+`tailnet` transport is for — see above. **`0.0.0.0` is no longer available as a
+per-host exception**: `tasks/load-local-env.yml` fails the run on any wildcard
+bind, on every host and every transport, with no override flag (F-MDP4-3). An
+unauthenticated inference API on every interface is not something this repo will
+render, and on a machine that joins untrusted networks it is the specific thing
+the design exists to prevent.
 
 ## Apple Silicon backend: MLX vs GGML (Amendment 1 A4.5)
 

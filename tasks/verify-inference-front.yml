@@ -1,0 +1,231 @@
+---
+# Verify the roaming-host inference front (MDP-4, T-MDP4-6). Same style and
+# spirit as tasks/verify-ollama-residency.yml: the invariants are CHECKED, not
+# trusted, and each failure message says what broke and what it means.
+#
+# Runs last, on `tailnet` inference hosts only. Skipped under --check (every
+# check here reads live process/network state).
+#
+# Escape hatch: -e skip_front_check=true.
+
+- name: Verify the inference front
+  when:
+    - not ansible_check_mode
+    - not (skip_front_check | default(false) | bool)
+  vars:
+    _front_model_names: >-
+      {{ ((front_models.json | default({})).data | default([])) | map(attribute='id') | list }}
+  block:
+
+    # --- a. Listeners ---------------------------------------------------------
+    # The whole point of the `tailnet` transport is that NOTHING of ours is on a
+    # routable address. This is the check that would have caught the original
+    # fault: a laptop that wandered onto another network while still holding a
+    # LAN bind.
+    - name: Read the listening sockets owned by our services
+      ansible.builtin.shell: |
+        set -o pipefail
+        lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
+          | awk 'NR > 1 && ($1 == "ollama" || $1 == "caddy") { print $1, $NF }' \
+          | tr -d '()' | sort -u
+      register: front_listeners
+      changed_when: false
+
+    - name: Show the listeners
+      ansible.builtin.debug:
+        msg: "{{ front_listeners.stdout_lines | default(['(none)']) }}"
+
+    - name: Assert nothing of ours listens on a routable address (F-MDP4-2)
+      ansible.builtin.assert:
+        that:
+          - _routable | length == 0
+        fail_msg: >-
+          A service on {{ inventory_hostname }} is listening on a NON-LOOPBACK
+          address: {{ _routable }}. This host is on the `tailnet` transport, so
+          every inference service must bind 127.0.0.1 only -- these ports have no
+          authentication, and this laptop joins untrusted networks. Check the
+          rendered plists for a stale bind and re-run the ollama tag.
+        success_msg: >-
+          All ollama/caddy listeners are on loopback:
+          {{ front_listeners.stdout_lines | default([]) }}
+      vars:
+        # Anything that is not 127.x / [::1] / localhost is routable from
+        # somewhere, which on a travelling laptop means "from a stranger".
+        _routable: >-
+          {{ front_listeners.stdout_lines | default([])
+             | reject('search', '\s(127\.[0-9.]+|\[::1\]|localhost):')
+             | list }}
+
+    - name: Assert ollama holds loopback :11434 and Caddy holds the front port
+      ansible.builtin.assert:
+        that:
+          - front_listeners.stdout is search('ollama\s+127\.0\.0\.1:11434')
+          - front_listeners.stdout is search('caddy\s+127\.0\.0\.1:' ~ ollama_front_port)
+        fail_msg: >-
+          Expected ollama on 127.0.0.1:11434 and caddy on
+          127.0.0.1:{{ ollama_front_port }}; saw
+          {{ front_listeners.stdout_lines | default([]) }}. If caddy is missing,
+          the launchd job is probably crash-looping on a bad Caddyfile -- check
+          {{ inference_front_log_dir }}/inference-front.err.
+        success_msg: "ollama :11434 and caddy :{{ ollama_front_port }} are both on loopback."
+
+    # --- b. The Host guard is what makes Caddy necessary ----------------------
+    - name: Probe raw ollama with a foreign Host header
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -w
+          - '%{http_code}'
+          - -H
+          - 'Host: probe.example.ts.net'
+          - http://127.0.0.1:11434/api/version
+      register: host_guard
+      changed_when: false
+
+    # STOP 2: report, do not crash. A 200 here means ollama stopped validating
+    # Host, which makes the Caddy hop removable -- a HUMAN decision, not one to
+    # take inside a provisioning run.
+    - name: Report if ollama's Host guard has gone away (STOP 2)
+      ansible.builtin.debug:
+        msg: >-
+          NOTE (STOP 2): raw ollama answered {{ host_guard.stdout | trim }}, not
+          403, to a request with a foreign Host header. The Host guard is the
+          only reason the Caddy shim exists (F-MDP4-4). If ollama's behaviour has
+          genuinely changed, Caddy may be removable and Phase B shrinks to the
+          `tailscale serve` rule -- record this and decide deliberately. Nothing
+          is broken; the front still works either way.
+      when: (host_guard.stdout | trim) != '403'
+
+    - name: Confirm the Host guard is present
+      ansible.builtin.debug:
+        msg: >-
+          Host guard confirmed: raw ollama 403s a foreign Host header, which is
+          exactly why the Caddy rewrite hop exists.
+      when: (host_guard.stdout | trim) == '403'
+
+    # --- c. ...and that Caddy actually defeats it -----------------------------
+    - name: Probe the front with the same foreign Host header
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -w
+          - '%{http_code}'
+          - -H
+          - 'Host: probe.example.ts.net'
+          - "http://127.0.0.1:{{ ollama_front_port }}/api/version"
+      register: front_rewrite
+      changed_when: false
+
+    - name: Assert the front rewrites Host and reaches ollama
+      ansible.builtin.assert:
+        that:
+          - (front_rewrite.stdout | trim) == '200'
+        fail_msg: >-
+          The front returned {{ front_rewrite.stdout | trim }}, not 200, for a
+          request carrying a tailnet-style Host header. 403 means `header_up Host
+          localhost:11434` is not taking effect. 404 usually means the Caddyfile
+          site address was written as `http://127.0.0.1:{{ ollama_front_port }}`
+          instead of `http://:{{ ollama_front_port }}` -- Caddy matches sites on
+          the Host header, and the incoming Host is the tailnet address, so a
+          127.0.0.1 site address matches nothing. 502 means ollama is not up on
+          127.0.0.1:11434.
+        success_msg: "Front rewrites Host and reaches ollama (200)."
+
+    # --- d. Streaming survives the shim ---------------------------------------
+    # A buffering proxy is not an error anywhere in the logs; it just makes every
+    # streaming consumer look hung. So assert the chunk count, not the status.
+    - name: Find a model to stream with
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ollama_front_port }}/v1/models"
+        return_content: true
+      register: front_models
+      failed_when: false
+      changed_when: false
+
+    - name: Stream a synthetic completion through the front
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -s -N -m 120 \
+          -H 'Host: probe.example.ts.net' \
+          -H 'Content-Type: application/json' \
+          -d '{"model":"{{ _stream_model }}","stream":true,"max_tokens":24,
+               "messages":[{"role":"user","content":"Reply with the digits one through ten, space separated."}]}' \
+          "http://127.0.0.1:{{ ollama_front_port }}/v1/chat/completions" \
+          | grep -c '^data: ' || true
+      register: front_stream
+      changed_when: false
+      when: _stream_model | length > 0
+      vars:
+        _stream_model: "{{ _front_model_names | first | default('') }}"
+
+    - name: Assert streaming arrives in chunks, not one lump
+      ansible.builtin.assert:
+        that:
+          - (front_stream.stdout | trim | int) >= 2
+        fail_msg: >-
+          A streamed completion through the front produced
+          {{ front_stream.stdout | trim }} SSE chunk(s). Fewer than 2 means the
+          response was buffered and released at the end -- check `flush_interval
+          -1` in the reverse_proxy block of {{ inference_front_caddyfile }}.
+          Every streaming consumer sees this as a hang, and nothing logs an error.
+        success_msg: >-
+          Streaming survives the shim ({{ front_stream.stdout | trim }} chunks).
+      when:
+        - front_stream is not skipped
+        - (front_stream.stdout | default('') | trim) != ''
+
+    - name: Note that the streaming check was skipped
+      ansible.builtin.debug:
+        msg: >-
+          Skipping the streaming check: no model is available on this host yet
+          (a dry run leaves nothing on disk). Re-run after a real pull with
+          -e model_pull_dry_run=false.
+      when: front_stream is skipped
+
+    # --- e. The door is a TCP forward, and ONLY that --------------------------
+    - name: Read the tailscale serve config for verification
+      ansible.builtin.command:
+        argv: ["{{ _ts_verify }}", serve, status, --json]
+      register: serve_verify
+      changed_when: false
+      failed_when: false
+      vars:
+        _ts_verify: "{{ tailscale_cli.stdout | trim }}"
+
+    - name: Assert the TCP forward is published and Funnel is NOT (F-MDP4-5)
+      ansible.builtin.assert:
+        that:
+          - _forward == ('127.0.0.1:' ~ ollama_front_port)
+          - not _funnel_on
+        fail_msg: >-
+          Serve config wrong on {{ inventory_hostname }}. TCP forward for
+          :{{ inference_front_tailnet_port }} is '{{ _forward | default('absent') }}'
+          (want 127.0.0.1:{{ ollama_front_port }}), AllowFunnel={{ _funnel | default({}) }}.
+          FUNNEL WOULD PUBLISH THIS PORT TO THE PUBLIC INTERNET -- an
+          unauthenticated inference API reachable by anyone. It must never be
+          enabled on this node (F-MDP4-5); turn it off with
+          `tailscale funnel {{ inference_front_tailnet_port }} off`.
+        success_msg: >-
+          Door verified: tailnet :{{ inference_front_tailnet_port }} is a raw TCP
+          forward to 127.0.0.1:{{ ollama_front_port }}, and Funnel is off.
+      vars:
+        _doc: "{{ (serve_verify.stdout | default('') | trim or '{}') | from_json }}"
+        _forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
+        _funnel: "{{ _doc.AllowFunnel | default({}) }}"
+        _funnel_on: "{{ (_funnel.values() | list | select('equalto', true) | list | length) > 0 }}"
+
+    - name: Summarise the front
+      ansible.builtin.debug:
+        msg:
+          - "Roaming inference front on {{ inventory_hostname }} (G30 r4):"
+          - "  tailnet :{{ inference_front_tailnet_port }} -> 127.0.0.1:{{ ollama_front_port }} (tailscale serve, TCP)"
+          - "  127.0.0.1:{{ ollama_front_port }} -> 127.0.0.1:11434 (caddy, rewrites Host)"
+          - "  local tools use http://127.0.0.1:11434 DIRECTLY and work offline (F-MDP4-6)"
+          - "  access control for the tailnet side is the ACL, not this host (H2)"
+          - "  logs: {{ inference_front_log_dir }}/"

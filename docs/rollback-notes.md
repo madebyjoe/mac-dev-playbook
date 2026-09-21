@@ -165,3 +165,69 @@ launchd services: to remove one, `launchctl bootout "gui/$(id -u)/com.llamacpp.<
 and delete `~/Library/LaunchAgents/com.llamacpp.<safe-name>.plist`. **Downloaded
 GGUFs in `~/.cache/llamacpp/models/` are never deleted by any code path** — remove
 them by hand if you want the space back.
+
+## MDP-4 — roaming `medium` transport (G30 r4)
+
+**Repo-only parts** (revert restores prior behaviour, no machine state): the
+`inference_transport` / `inference_bind_ip` vars and the transport-aware asserts
+in `tasks/load-local-env.yml`, the bind-site substitutions in the group_vars and
+plist templates, the transport branch in `templates/litellm-snippet.yml.j2`, the
+transport handling in `scripts/probe_backends.py`, `ports.ollama_front` in the
+manifest, and the new task/template/runbook files. `artifacts/` is never applied
+by this repo, so re-rendering a snippet does not touch the router.
+
+**The cheap revert.** `inference_transport` defaults to `lan` in
+`group_vars/all.yml`, so **deleting `host_vars/mac-personal.yml` alone** puts the
+host back on the LAN bind:
+
+```sh
+rm host_vars/mac-personal.yml
+ansible-playbook main.yml --limit personal --tags config,ollama
+```
+
+That does NOT remove the front or the tailnet door — they just stop being used.
+To remove them properly, in this order:
+
+```sh
+# 1. Close the tailnet door FIRST. Leaving it open while the front goes away
+#    means the router connects and hangs on a dead port instead of failing fast.
+tailscale serve --tcp=11434 off
+
+# 2. Tear down the Caddy front.
+uid=$(id -u)
+launchctl bootout "gui/${uid}/com.madebyjoe.inference-front" 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/com.madebyjoe.inference-front.plist
+rm -rf ~/.config/inference-front
+
+# 3. Return the host to the LAN bind.
+rm host_vars/mac-personal.yml
+ansible-playbook main.yml --limit personal --tags config,ollama
+```
+
+**External state that outlives a `git revert`:**
+
+1. **The tailnet serve config.** Held by `tailscaled`, not by any file in this
+   repo, and it **survives a reboot and a revert**. `tailscale serve --tcp=11434 off`
+   is the only thing that removes it. Check with `tailscale serve status`.
+2. **The `com.madebyjoe.inference-front` launchd agent.** Booting it out is not
+   enough on its own — with the plist still in `~/Library/LaunchAgents` it comes
+   back at next login. Delete the plist too.
+3. **Homebrew `caddy`.** Installed by the front task, never removed by any code
+   path. `brew uninstall caddy` if you want the space back.
+4. **Router config (human).** The `medium` `api_base` on Unraid points at the
+   tailnet address. Reverting here does not change the router — repoint it to the
+   LAN address by hand, or `medium` stays down. Same for the
+   `fallbacks: {medium: [medium-degraded]}` entry.
+5. **The tailnet ACL (human).** The `tag:llm-router → tag:inference-roaming:11434`
+   rule is the access control for this path. Remove it when the path goes away,
+   or it silently permits more than the topology needs.
+
+**Order matters on the way IN, too.** Applying Phase B moves `medium` off the LAN
+entirely. Until the router side is done (H1 tailnet node, H2 ACL, H3 repointed
+`api_base`), the router **cannot reach `medium` at all** — the alias 503s. That is
+expected and is what `fallbacks: {medium: [medium-degraded]}` is for; it is not a
+regression to debug.
+
+No models are deleted by any path here, and the `0.0.0.0` prohibition (F-MDP4-3)
+has no override flag by design — if a revert leaves you wanting one, the answer is
+`inference_transport`, not a wildcard bind.

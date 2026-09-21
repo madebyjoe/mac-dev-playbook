@@ -60,6 +60,15 @@ ports:
   # asserts the two agree. scripts/probe_backends.py probes this port for any
   # role that has dev-tier entries.
   ollama_dev: 11435
+  # Loopback Caddy front for a ROAMING host (MDP-4, F-MDP4-8). On a host with
+  # `inference_transport: tailnet` every inference service binds 127.0.0.1, and
+  # `tailscale serve --tcp` forwards tailnet :11434 here; Caddy rewrites the Host
+  # header to localhost:11434 so loopback ollama accepts the request instead of
+  # 403-ing it. Loopback-only, no TLS, no auth, no admin API -- the tailnet ACL
+  # is the access control. 11435 is the M1 Pro dev zoo and is NOT reused. Keep in
+  # sync with `ollama_front_port` in group_vars/all.yml --
+  # tasks/configure-inference-front.yml asserts the two agree.
+  ollama_front: 11436
 
 models:
 

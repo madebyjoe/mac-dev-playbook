@@ -1,0 +1,59 @@
+{# Loopback Host-rewriting shim for a ROAMING inference host (MDP-4, F-MDP4-4).
+
+   WHY THIS EXISTS AT ALL. On a `tailnet` host ollama binds 127.0.0.1 only
+   (F-MDP4-2), and loopback ollama validates the Host header: anything that is
+   not localhost-ish gets a 403. `tailscale serve` forwards the caller's Host
+   untouched and has no way to rewrite it, so the router's request arrives with
+   Host: <tailnet-name-or-ip> and is refused. Caddy sits in the middle and
+   rewrites exactly that one header. It does nothing else, and if ollama ever
+   stops enforcing the Host guard (T-MDP4-6b turning 200) this whole hop can be
+   deleted -- that is a human decision, reported not taken.
+
+   DELIBERATELY ABSENT: TLS (the tailnet is the encrypted layer), auth (the
+   tailnet ACL is the access control -- only tag:llm-router may reach this
+   node's :11434), the admin API, and any other route. #}
+{
+	# No admin endpoint. Caddy's default admin API on :2019 is unauthenticated
+	# and can rewrite this config at runtime -- on a laptop that joins untrusted
+	# networks it is exactly the door this whole design exists to close.
+	# CONSEQUENCE: `caddy reload` needs the admin API, so it does not work here.
+	# A Caddyfile change is applied by bouncing the launchd job instead
+	# (launchctl kickstart -k) -- see runbooks/inference-front.md.
+	admin off
+
+	# This listener is plain HTTP on loopback. Without this, Caddy would try to
+	# provision certificates for the site address and fail (no public name, no
+	# reachable ACME challenge) or bind :443.
+	auto_https off
+}
+
+{# The site address MUST be `http://:PORT`, never `http://127.0.0.1:PORT`.
+   Caddy matches sites on the HOST HEADER, and the incoming Host here is the
+   tailnet address, not 127.0.0.1 -- so a 127.0.0.1 site address would match
+   nothing and every request would 404. `bind 127.0.0.1` below is what actually
+   restricts the LISTENER; the site address only decides what hostnames match,
+   and an empty host matches all of them. #}
+http://:{{ ollama_front_port }} {
+	# THE listener restriction. Without this line Caddy listens on every
+	# interface, which would re-create the 0.0.0.0 exposure that F-MDP4-3
+	# forbids -- on the ollama front, with no auth in front of it.
+	bind 127.0.0.1
+
+	reverse_proxy 127.0.0.1:11434 {
+		# The entire reason this process exists.
+		header_up Host localhost:11434
+
+		# Stream token-by-token instead of buffering. -1 flushes immediately;
+		# without it a `stream: true` completion arrives as one lump at the end
+		# and every streaming consumer looks hung. T-MDP4-6d asserts a real
+		# streamed call still arrives in multiple chunks through this hop.
+		flush_interval -1
+	}
+
+	log {
+		output file {{ inference_front_log_dir }}/inference-front.access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
