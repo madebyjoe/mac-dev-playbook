@@ -222,6 +222,14 @@ ansible-playbook main.yml --limit personal --tags config,ollama
    rule is the access control for this path. Remove it when the path goes away,
    or it silently permits more than the topology needs.
 
+**The door can be held shut without holding back the front.** The serve rule is
+tagged `tailnet-door`, so `--skip-tags tailnet-door` builds and verifies the
+loopback Caddy front while publishing nothing to the tailnet. Use that whenever
+the ACL (H2) is not yet in place -- the ACL is the only authentication the port
+has, so an open door with no ACL is an unauthenticated inference API reachable by
+every node on the tailnet. `tailscale serve status` reporting `No serve config`
+means it is shut.
+
 **Order matters on the way IN, too.** Applying Phase B moves `medium` off the LAN
 entirely. Until the router side is done (H1 tailnet node, H2 ACL, H3 repointed
 `api_base`), the router **cannot reach `medium` at all** — the alias 503s. That is

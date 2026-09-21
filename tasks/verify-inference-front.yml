@@ -25,9 +25,14 @@
     - name: Read the listening sockets owned by our services
       ansible.builtin.shell: |
         set -o pipefail
+        # The ADDRESS is $(NF-1), not $NF: with -sTCP:LISTEN lsof appends a
+        # literal "(LISTEN)" as the last field, so $NF yields "ollama (LISTEN)"
+        # for every row. That would make the routable-address check below
+        # unfireable -- no line would ever contain an address to reject -- which
+        # is worse than no check at all.
         lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null \
-          | awk 'NR > 1 && ($1 == "ollama" || $1 == "caddy") { print $1, $NF }' \
-          | tr -d '()' | sort -u
+          | awk 'NR > 1 && ($1 == "ollama" || $1 == "caddy") { print $1, $(NF - 1) }' \
+          | sort -u
       register: front_listeners
       changed_when: false
 
@@ -197,6 +202,7 @@
       failed_when: false
       vars:
         _ts_verify: "{{ tailscale_cli.stdout | trim }}"
+      tags: ['tailnet-door']
 
     - name: Assert the TCP forward is published and Funnel is NOT (F-MDP4-5)
       ansible.builtin.assert:
@@ -219,6 +225,7 @@
         _forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
         _funnel: "{{ _doc.AllowFunnel | default({}) }}"
         _funnel_on: "{{ (_funnel.values() | list | select('equalto', true) | list | length) > 0 }}"
+      tags: ['tailnet-door']
 
     - name: Summarise the front
       ansible.builtin.debug:

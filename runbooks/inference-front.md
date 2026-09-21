@@ -57,10 +57,30 @@ runs `caddy validate` on the rendered file *before* any restart, because with
 `KeepAlive` a bad config becomes a crash-loop that reads as "the front is down"
 rather than "the config is wrong".
 
+## Building the front and opening the door are separate steps
+
+The tailnet ACL is the **only** authentication this port has. Opening the door
+before that ACL exists publishes an unauthenticated inference API to every node
+on the tailnet. So the serve rule is tagged `tailnet-door` and can be held back:
+
+```sh
+# Build and verify the loopback front. Nothing becomes network-reachable:
+# ollama stays on 127.0.0.1:11434, Caddy on 127.0.0.1:11436, checks a-d run.
+ansible-playbook main.yml --limit personal --tags inference-front --skip-tags tailnet-door
+
+# Open the door, once the router is a tailnet node (H1) and the ACL restricting
+# tag:llm-router -> tag:inference-roaming:11434 is in place (H2). Idempotent, so
+# this is just a re-run; check (e) runs too.
+ansible-playbook main.yml --limit personal --tags inference-front
+```
+
+`tailscale serve status` reporting `No serve config` means the door is shut.
+
 ## Commands
 
 ```sh
-# Provision / re-render (roaming host only).
+# Provision / re-render (roaming host only). Add --skip-tags tailnet-door to
+# build the front without publishing anything to the tailnet.
 ansible-playbook main.yml --limit personal --tags inference-front
 
 # Status / restart / stop. NOTE kickstart, not `caddy reload` (admin off).

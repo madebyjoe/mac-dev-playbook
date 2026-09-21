@@ -118,6 +118,16 @@
   when: not ansible_check_mode
 
 # --- T-MDP4-5: the only remote door ------------------------------------------
+# Everything below is tagged `tailnet-door`, so the loopback front can be built
+# and verified WITHOUT publishing anything to the tailnet:
+#
+#   --tags inference-front --skip-tags tailnet-door   build the front, door shut
+#   --tags inference-front                            build the front, door open
+#
+# That split matters because the tailnet ACL is the ONLY authentication this
+# port has (F-MDP4-5, human track H2). Opening the door before the ACL exists
+# publishes an unauthenticated inference API to every node on the tailnet. The
+# step is idempotent, so opening it later is just a re-run.
 - name: Resolve the tailscale CLI
   ansible.builtin.shell: |
     set -o pipefail
@@ -134,6 +144,8 @@
   check_mode: false
 
 # STOP 3 from the brief: halt and report rather than improvise a different door.
+  tags: ['tailnet-door']
+
 - name: Assert a tailscale CLI exists (STOP 3)
   ansible.builtin.assert:
     that:
@@ -153,10 +165,13 @@
 # The serve config is READ, compared, and only then written. `tailscale serve`
 # exits 0 whether or not it changed anything, so a return code cannot drive
 # `changed` -- the before/after config does.
+  tags: ['tailnet-door']
+
 - name: Note the resolved CLI and the forward target
   ansible.builtin.set_fact:
     _ts: "{{ tailscale_cli.stdout | trim }}"
     _want_target: "127.0.0.1:{{ ollama_front_port }}"
+  tags: ['tailnet-door']
 
 - name: Read the current tailscale serve config
   ansible.builtin.command:
@@ -165,6 +180,7 @@
   changed_when: false
   failed_when: false
   check_mode: false
+  tags: ['tailnet-door']
 
 - name: Note whether the tailnet TCP forward already exists
   ansible.builtin.set_fact:
@@ -172,6 +188,7 @@
   vars:
     _doc: "{{ (serve_before.stdout | default('') | trim or '{}') | from_json }}"
     _serve_forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
+  tags: ['tailnet-door']
 
 - name: Open the tailnet TCP forward
   ansible.builtin.command:
@@ -191,6 +208,7 @@
   when:
     - not ansible_check_mode
     - not (_forward_present | bool)
+  tags: ['tailnet-door']
 
 - name: Re-read the tailscale serve config
   ansible.builtin.command:
@@ -203,6 +221,8 @@
 
 # STOP 1 from the brief: a port conflict is REPORTED, never silently worked
 # around by choosing a different tailnet port.
+  tags: ['tailnet-door']
+
 - name: Assert the tailnet TCP forward is in place (STOP 1)
   ansible.builtin.assert:
     that:
@@ -225,3 +245,4 @@
     _doc: "{{ (serve_after.stdout | default('') | trim or '{}') | from_json }}"
     _after_forward: "{{ ((_doc.TCP | default({}))[inference_front_tailnet_port | string] | default({})).TCPForward | default('') }}"
   when: not ansible_check_mode
+  tags: ['tailnet-door']
