@@ -109,6 +109,9 @@ core_homebrew_cask_apps:
   - font-open-sans
   - font-roboto
   - font-source-code-pro
+  # Nerd Font v3 -- required by the nerdfont-v3 powerlevel10k prompt. Without
+  # it the prompt is tofu boxes. See tasks/configure-shell.yml.
+  - font-meslo-lg-nerd-font
   # Core Apps
   - android-studio
   - arc
@@ -138,6 +141,39 @@ core_homebrew_cask_apps:
   - zoom
 
 core_mas_apps: []
+
+# ── Shell + terminal (tag: dotfiles) ──────────────────────────────────────────
+# See tasks/configure-shell.yml for the full chain and runbooks/shell.md for
+# verification. The short version: the dotfiles repo owns shell CONTENT, this
+# playbook owns the pieces a fresh clone does not carry.
+
+# HTTPS, not SSH: this runs during bootstrap, before a key is on GitHub.
+dotfiles_repo: https://github.com/madebyjoe/dotfiles.git
+dotfiles_version: HEAD
+dotfiles_dir: "{{ ansible_facts.env.HOME }}/.dotfiles"
+oh_my_zsh_dir: "{{ ansible_facts.env.HOME }}/.oh-my-zsh"
+powerlevel10k_repo: https://github.com/romkatv/powerlevel10k.git
+powerlevel10k_version: master
+
+# Ghostty. Written to the Application Support path, not ~/.config/ghostty:
+# that is the path `ghostty +show-config` proves is live on macOS and the one the
+# existing hand-written config occupied. Keeping to one file avoids two configs
+# fighting over the same key.
+ghostty_config_path: >-
+  {{ ansible_facts.env.HOME }}/Library/Application Support/com.mitchellh.ghostty/config
+# Exact family name from `ghostty +list-fonts` for the font-meslo-lg-nerd-font
+# cask. A Nerd Font v3 face is REQUIRED -- ~/.p10k.zsh is a nerdfont-v3 config,
+# and without one the prompt renders as tofu. Not the same thing as the older
+# "Meslo LG ... for Powerline" faces.
+ghostty_font_family: MesloLGS Nerd Font Mono
+# 13 is also Ghostty's own macOS default, so setting it explicitly changes
+# nothing visually -- it just stops the size drifting with a Ghostty release.
+ghostty_font_size: 13
+ghostty_theme: Solarized Dark Higher Contrast
+ghostty_keybinds:
+  # ctrl+space needs the input-source hotkey disabled to be reliable; that is
+  # what tasks/configure-macos-prefs.yml is for. See runbooks/macos-preferences.md
+  - global:ctrl+space=toggle_quick_terminal
 
 # Mackup apps whose profiles sync files under ~/Library/Preferences.
 # cfprefsd refuses to read a symlinked plist, so syncing these makes the

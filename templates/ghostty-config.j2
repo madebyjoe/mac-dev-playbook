@@ -1,0 +1,33 @@
+# ANSIBLE MANAGED — mac-dev-playbook, tasks/configure-shell.yml (tag: dotfiles)
+#
+# Edits here are overwritten on the next run. Change the `ghostty_*` variables
+# in group_vars/ instead. The file Ansible replaced is kept alongside this one
+# as config.<timestamp>~ (Ansible's own backup), so nothing is lost.
+#
+# WHY THIS PATH. Ghostty reads both the XDG path and, on macOS, this
+# Application Support path. This is the one `ghostty +show-config` proves is
+# live on these machines, and the one the hand-written config already occupied,
+# so writing here avoids two files silently fighting over the same setting.
+# Verify after a run with: ghostty +show-config | grep font-family
+
+# The font is the whole point of this file being managed.
+#
+# ~/.p10k.zsh sets POWERLEVEL9K_MODE=nerdfont-v3, which draws the prompt out of
+# Nerd Font v3 glyphs. Without a v3 face installed AND selected here, the prompt
+# renders as tofu boxes and question marks -- the symptom that reads as "my
+# terminal is broken" on a fresh machine. The older "Meslo LG ... for Powerline"
+# faces (what dotfiles' core/clone.sh installs from powerline/fonts) are the
+# PREVIOUS generation and do not carry the v3 glyph range.
+#
+# `MesloLGS Nerd Font Mono` is the exact family name Ghostty reports for the
+# font-meslo-lg-nerd-font cask -- confirmed with `ghostty +list-fonts`. It is not
+# a guess, and it is not interchangeable with "MesloLGS NF" (the name p10k's own
+# installer uses for its separately-distributed build).
+font-family = {{ ghostty_font_family }}
+font-size = {{ ghostty_font_size }}
+
+theme = {{ ghostty_theme }}
+
+{% for kb in ghostty_keybinds %}
+keybind = {{ kb }}
+{% endfor %}

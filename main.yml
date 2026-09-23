@@ -79,8 +79,16 @@
         path: /opt/homebrew/bin/brew
       register: homebrew_check
 
+    # SAFETY NET, NOT THE PLAN. The official installer wants a TTY (it prompts
+    # for RETURN) and sudo, and Ansible gives it neither -- the play is
+    # `become: false`. NONINTERACTIVE=1 is what lets it run unattended at all;
+    # on a genuinely fresh Mac it will still fail for want of a cached sudo
+    # ticket. Install Homebrew by hand first -- README, "Bootstrapping a
+    # brand-new Mac", step 2 -- and this task becomes a no-op.
     - name: Install Homebrew (if missing)
       ansible.builtin.shell: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      environment:
+        NONINTERACTIVE: "1"
       when: not homebrew_check.stat.exists
       changed_when: true
 
@@ -330,6 +338,15 @@
       when: >-
         ('personal' in group_names) or ('work' in group_names)
       tags: ['config', 'macos-prefs']
+
+    - name: Configure the shell and terminal environment
+      ansible.builtin.import_tasks: tasks/configure-shell.yml
+      # GUI profiles only, and guarded positively for the same reason as the
+      # macOS-prefs task above: a headless box has no terminal to theme, and its
+      # group name varies ('headless', 'headless-remote').
+      when: >-
+        ('personal' in group_names) or ('work' in group_names)
+      tags: ['dotfiles']
 
   handlers:
     # Bounce the Ollama service only when the plist actually changed (F7).

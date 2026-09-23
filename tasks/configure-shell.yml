@@ -1,0 +1,149 @@
+---
+# Shell + terminal environment (tag: dotfiles).
+#
+# WHAT THIS IS FOR. A fresh laptop came up with a working shell but a broken
+# LOOK: no prompt theme, tofu glyphs, default Ghostty. Every piece of the chain
+# existed somewhere, and no single place had all of it:
+#
+#   ~/.zshrc -> ~/.dotfiles/.zshrc      symlink made only by dotfiles' fresh.sh
+#     sets ZSH_THEME=powerlevel10k/...  but github.com/madebyjoe/dotfiles still
+#                                       ships ZSH_THEME="agnoster" -- the local
+#                                       copy was never committed
+#     sets ZSH_CUSTOM=$DOTFILES         so the theme must live in
+#                                       ~/.dotfiles/themes/powerlevel10k, which
+#                                       is UNTRACKED -- absent from any clone
+#     sources $ZSH/oh-my-zsh.sh         oh-my-zsh installed by nothing here
+#     sources ~/.p10k.zsh               95KB of prompt config that lived ONLY in
+#                                       one home directory: not in the dotfiles
+#                                       repo, and `zsh` is on Mackup's ignore
+#                                       list so iCloud never had it either
+#   Ghostty                             unmanaged; no font-family, so the
+#                                       nerdfont-v3 prompt had no v3 font
+#
+# DIVISION OF LABOUR. The dotfiles repo stays the source of truth for shell
+# CONTENT (aliases.zsh, path.zsh, .zshrc). This playbook guarantees only the
+# things a fresh clone does not carry: the runtime (oh-my-zsh), the theme
+# checkout, the prompt config, and the terminal itself. It is deliberately
+# NON-DESTRUCTIVE about anything a human may have edited -- see the guards.
+#
+# See runbooks/shell.md for verification and rollback.
+
+- name: Install oh-my-zsh (if missing)
+  # KEEP_ZSHRC=yes is the important one: the installer's default is to MOVE an
+  # existing ~/.zshrc to ~/.zshrc.pre-oh-my-zsh and write its own. Since ~/.zshrc
+  # here is a symlink into the dotfiles repo, the default would break the link
+  # and replace a tracked file with a template. RUNZSH=no keeps it from exec'ing
+  # an interactive zsh and hanging the play; CHSH=no leaves the login shell alone
+  # (macOS already defaults to zsh).
+  ansible.builtin.shell:
+    cmd: /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/HEAD/tools/install.sh)"
+    creates: "{{ oh_my_zsh_dir }}/oh-my-zsh.sh"
+  environment:
+    RUNZSH: "no"
+    CHSH: "no"
+    KEEP_ZSHRC: "yes"
+  tags: ['dotfiles']
+
+- name: Clone the dotfiles repo (if missing)
+  # HTTPS, not SSH, on purpose: a brand-new Mac has no key on GitHub yet, and
+  # this task runs during bootstrap. `update: false` means an existing checkout
+  # is NEVER touched -- the working copy routinely holds uncommitted work, and a
+  # pull/reset here would discard it.
+  ansible.builtin.git:
+    repo: "{{ dotfiles_repo }}"
+    dest: "{{ dotfiles_dir }}"
+    version: "{{ dotfiles_version }}"
+    update: false
+  tags: ['dotfiles']
+
+- name: Install powerlevel10k into the dotfiles ZSH_CUSTOM themes dir
+  # .zshrc sets ZSH_CUSTOM=$DOTFILES, so oh-my-zsh resolves
+  # ZSH_THEME=powerlevel10k/powerlevel10k to $DOTFILES/themes/powerlevel10k.
+  # That directory is untracked upstream, so this is the task that makes a fresh
+  # clone produce a prompt at all. depth=1 -- no history needed for a vendored
+  # theme. update: false for the same reason as above: leave a local checkout be.
+  ansible.builtin.git:
+    repo: "{{ powerlevel10k_repo }}"
+    dest: "{{ dotfiles_dir }}/themes/powerlevel10k"
+    depth: 1
+    version: "{{ powerlevel10k_version }}"
+    update: false
+  tags: ['dotfiles']
+
+- name: Ensure .zshrc selects the powerlevel10k theme
+  # Corrects the known upstream drift (ZSH_THEME="agnoster") in place rather
+  # than overwriting the whole file, so a clone that is otherwise current keeps
+  # everything else it carries. Idempotent, and a no-op on any machine whose
+  # .zshrc is already right. `create: false` -- if there is no .zshrc we do not
+  # invent one; that is the dotfiles repo's job, not ours.
+  ansible.builtin.lineinfile:
+    path: "{{ dotfiles_dir }}/.zshrc"
+    regexp: '^\s*ZSH_THEME='
+    line: 'ZSH_THEME="powerlevel10k/powerlevel10k"'
+    create: false
+  tags: ['dotfiles']
+
+- name: Check what ~/.zshrc currently is
+  ansible.builtin.stat:
+    path: "{{ ansible_facts.env.HOME }}/.zshrc"
+    follow: false
+  register: home_zshrc
+  tags: ['dotfiles']
+
+- name: Back up a real ~/.zshrc before replacing it with the symlink
+  # Only fires when ~/.zshrc is a REGULAR FILE -- i.e. the dotfiles symlink was
+  # never made, so whatever is there is unmanaged and may be the only copy.
+  # Refusing to clobber it silently is the point; the file module below would
+  # otherwise delete it outright.
+  ansible.builtin.copy:
+    src: "{{ ansible_facts.env.HOME }}/.zshrc"
+    dest: "{{ ansible_facts.env.HOME }}/.zshrc.pre-ansible"
+    remote_src: true
+    force: false
+    mode: '0600'
+  when:
+    - home_zshrc.stat.exists
+    - home_zshrc.stat.isreg | default(false)
+  tags: ['dotfiles']
+
+- name: Link ~/.zshrc to the dotfiles copy
+  ansible.builtin.file:
+    src: "{{ dotfiles_dir }}/.zshrc"
+    dest: "{{ ansible_facts.env.HOME }}/.zshrc"
+    state: link
+    force: true
+  tags: ['dotfiles']
+
+- name: Install the powerlevel10k prompt config
+  # force: false -- `p10k configure` rewrites ~/.p10k.zsh in place, so a machine
+  # where the prompt has been re-tuned must win over the vendored copy. This task
+  # exists to stop a fresh machine dropping into the p10k configuration wizard on
+  # first shell, not to hold the file to one version. To push an updated prompt
+  # everywhere: re-copy it into files/p10k.zsh and delete ~/.p10k.zsh on the
+  # target first.
+  ansible.builtin.copy:
+    src: p10k.zsh
+    dest: "{{ ansible_facts.env.HOME }}/.p10k.zsh"
+    force: false
+    mode: '0644'
+  tags: ['dotfiles']
+
+- name: Ensure the Ghostty config directory exists
+  ansible.builtin.file:
+    path: "{{ ghostty_config_path | dirname }}"
+    state: directory
+    mode: '0755'
+  tags: ['dotfiles', 'ghostty']
+
+- name: Render the Ghostty config
+  # backup: true because this REPLACES a hand-written file the first time it
+  # runs. The two settings the hand-written config carried (the Solarized theme
+  # and the ctrl+space quick-terminal keybind) are reproduced through
+  # ghostty_theme / ghostty_keybinds, so the rendered result is the same terminal
+  # plus a working font -- but the backup means that claim is checkable.
+  ansible.builtin.template:
+    src: ghostty-config.j2
+    dest: "{{ ghostty_config_path }}"
+    mode: '0644'
+    backup: true
+  tags: ['dotfiles', 'ghostty']

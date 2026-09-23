@@ -272,3 +272,30 @@ still points at `qwen3.5:9b-mlx`.
 - **`scripts/soak_small_candidate.sh`** makes requests and writes one report
   file. It never pulls, evicts, or changes an alias, so it has nothing to roll
   back.
+
+## Shell and terminal (`dotfiles` tag)
+
+`git revert` restores the repo, but the `dotfiles` tag creates state outside it.
+Full detail, including the verification commands, is in `runbooks/shell.md`; the
+short version:
+
+- **Ghostty config** — the task templates with `backup: true`, so the file it
+  replaced is beside it as
+  `~/Library/Application Support/com.mitchellh.ghostty/config.<timestamp>~`.
+  Restore that and reload with `cmd+shift+,`. A revert alone leaves the rendered
+  config in place.
+- **`~/.zshrc`** — if the run found a *regular file* rather than the dotfiles
+  symlink, it copied it to `~/.zshrc.pre-ansible` before linking:
+  `rm ~/.zshrc && mv ~/.zshrc.pre-ansible ~/.zshrc`. Where the symlink already
+  existed, nothing was backed up because nothing was lost.
+- **oh-my-zsh, the powerlevel10k checkout, `~/.p10k.zsh`** — all left in place by
+  a revert. Remove by hand only if you actually want them gone:
+  `rm -rf ~/.oh-my-zsh ~/.dotfiles/themes/powerlevel10k ~/.p10k.zsh`. Note that
+  removing the theme while `~/.dotfiles/.zshrc` still sets
+  `ZSH_THEME=powerlevel10k/powerlevel10k` leaves oh-my-zsh warning on every
+  shell — revert the `.zshrc` line too, or leave the checkout alone.
+- **The Nerd Font** — `brew uninstall --cask font-meslo-lg-nerd-font`. Reverting
+  its removal from `core_homebrew_cask_apps` does not uninstall it.
+- **`ZSH_THEME` in `~/.dotfiles/.zshrc`** — edited in a *different repo* by
+  `lineinfile`, so no revert here touches it. On these machines the line was
+  already correct and the task was a no-op; set it back by hand if needed.
