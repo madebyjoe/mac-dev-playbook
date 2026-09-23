@@ -169,6 +169,39 @@ ollama list
 curl -s http://127.0.0.1:11434/api/tags
 ```
 
+**MIGRATING A HOST FROM `lan` TO `tailnet`: delete the old `OLLAMA_HOST` export.**
+This bites, and it bites *silently*. The `lan` instructions further down tell you
+to put `export OLLAMA_HOST=<lan_ip>:11434` in `~/.zshrc`, which was correct then.
+After the transport flips it is actively wrong: the service is on loopback, but
+every new shell still points the CLI at a LAN address the laptop may not hold, so
+`ollama list` fails with an i/o timeout while the service is perfectly healthy.
+Nothing in the playbook can catch this — **this repo does not manage your
+dotfiles**, so the rendered plist and the shell disagree and only the shell is
+wrong.
+
+```sh
+# Find it (checks the interactive and login files, and the system-wide ones).
+for f in /etc/zshenv /etc/zprofile /etc/zshrc ~/.zshenv ~/.zprofile ~/.zshrc; do
+  [ -f "$f" ] && grep -Hn '^[^#]*OLLAMA_HOST' "$f"
+done
+
+# GUI apps (Raycast, IDEs) read this instead of your shell rc -- check it too.
+launchctl getenv OLLAMA_HOST
+
+# Remove the line, then drop it from shells that are already open:
+unset OLLAMA_HOST
+launchctl unsetenv OLLAMA_HOST     # only if the above printed something
+```
+
+Verify with a CLEAN shell, not the one you are sitting in — a shell that already
+exported the variable keeps it, and a subshell inherits it, so
+`zsh -l -c 'echo $OLLAMA_HOST'` will happily show you the stale value and look
+like the fix failed:
+
+```sh
+env -u OLLAMA_HOST zsh -l -c 'echo "${OLLAMA_HOST:-unset (correct)}"; ollama list'
+```
+
 The remote path is separate and is documented in `runbooks/inference-front.md`.
 
 ### On a `lan` (stationary) host — e.g. the M1 Pro

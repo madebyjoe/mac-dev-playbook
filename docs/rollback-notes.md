@@ -206,6 +206,13 @@ ansible-playbook main.yml --limit personal --tags config,ollama
 
 **External state that outlives a `git revert`:**
 
+0. **A stale `OLLAMA_HOST` export in your shell rc.** Not managed by this repo,
+   so no playbook run creates or removes it, and it silently contradicts the
+   rendered plist: the service is on loopback while every new shell points the
+   CLI at a LAN address. Seen for real on mac-personal (2026-09-23) two days
+   after the apply. Going the OTHER way (`tailnet` back to `lan`) you have to
+   put it back. See the migration note in `runbooks/ollama.md`.
+
 1. **The tailnet serve config.** Held by `tailscaled`, not by any file in this
    repo, and it **survives a reboot and a revert**. `tailscale serve --tcp=11434 off`
    is the only thing that removes it. Check with `tailscale serve status`.
